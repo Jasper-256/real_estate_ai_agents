@@ -15,9 +15,13 @@ data = {
     'model': 'dpt-2-latest'
 }
 
-# Upload a document 
-document = open('document.pdf', 'rb')
-files = {'document': document}
+def parse_pdf(pdf_path):
+    # Upload a document 
+    document = open(pdf_path, 'rb')
+    files = {'document': document}
 
-response = requests.post(url, files=files, data=data, headers=headers)
-print(response.json())
+    response = requests.post(url, files=files, data=data, headers=headers)
+    return response.json()['markdown']
+
+if __name__ == '__main__':
+    print(parse_pdf('home_inspection_docs/NaturalHazardDisclosureShort.pdf'))
