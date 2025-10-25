@@ -38,6 +38,8 @@ class LocationNewsResponse(Model):
     positive_stories: list  # List of dicts: [{"title": str, "summary": str, "url": str}, ...]
     negative_stories: list  # List of dicts: [{"title": str, "summary": str, "url": str}, ...]
     safety_score: float
+    school_rating: float
+    overall_rating: float
     agent_address: str
 
 # Model configuration
@@ -83,12 +85,43 @@ def fetch_news_articles(location_name: str) -> list:
         print(f"Error fetching news articles: {e}")
         return []
 
+# Helper function to fetch school-related articles using Tavily
+def fetch_school_articles(location_name: str) -> list:
+    """Fetch articles about schools and education in a location using Tavily search."""
+    try:
+        # Search for school ratings, rankings, and education quality
+        search_query = f"{location_name} schools ratings rankings education quality greatschools niche"
+        response = tavily_client.search(
+            query=search_query,
+            max_results=15,
+            search_depth="advanced",
+            include_domains=[],
+            exclude_domains=[]
+        )
+
+        articles = []
+        if response and 'results' in response:
+            for result in response['results']:
+                articles.append({
+                    'title': result.get('title', ''),
+                    'url': result.get('url', ''),
+                    'content': result.get('content', ''),
+                    'score': result.get('score', 0)
+                })
+
+        return articles
+    except Exception as e:
+        print(f"Error fetching school articles: {e}")
+        return []
+
 # Helper function to query the model
 def query_model(location_name: str) -> str:
     """Query the ASI:One model to get community news and safety analysis for a location."""
     try:
-        # First, fetch real news articles using Tavily
+        # Fetch real news articles using Tavily
         articles = fetch_news_articles(location_name)
+        # Fetch school-related articles
+        school_articles = fetch_school_articles(location_name)
 
         # Format the articles for the LLM
         articles_text = ""
@@ -99,7 +132,18 @@ def query_model(location_name: str) -> str:
                 articles_text += f"   Content: {article['content'][:300]}...\n"
                 articles_text += f"   URL: {article['url']}\n\n"
         else:
-            articles_text = "No recent news articles found. Please provide a general analysis based on your knowledge."
+            articles_text = "No recent news articles found. Please provide a general analysis based on your knowledge.\n\n"
+
+        # Format school articles for the LLM
+        school_text = ""
+        if school_articles:
+            school_text = "Here are articles about schools and education in this location:\n\n"
+            for i, article in enumerate(school_articles, 1):
+                school_text += f"{i}. {article['title']}\n"
+                school_text += f"   Content: {article['content'][:300]}...\n"
+                school_text += f"   URL: {article['url']}\n\n"
+        else:
+            school_text = "No school-related articles found. Please provide a general school rating based on your knowledge.\n\n"
 
         r = client.chat.completions.create(
             model=MODEL_NAME,
@@ -119,22 +163,26 @@ You MUST respond with ONLY valid JSON in the following format (no additional tex
     {"title": "story title 2", "summary": "brief summary", "url": "article url"}
   ],
   "safety_score": 7.5,
-  "safety_explanation": "Brief explanation of safety score based on the news articles"
+  "safety_explanation": "Brief explanation of safety score based on the news articles",
+  "school_rating": 8.2,
+  "school_explanation": "Brief explanation of school rating based on the education articles"
 }
 
 FOLLOW THESE INSTRUCTIONS STRICTLY:
 - The safety_score must be a number from 0-10 with precision to tenths (e.g., 7.3, 8.5).
+- The school_rating must be a number from 0-10 with precision to tenths (e.g., 7.3, 8.5).
 - Analyze the provided news articles and categorize them into positive and negative stories.
 - The included url links to the real news articles.
 - Choose the 2 most relevant positive stories and 2 most relevant negative stories.
 - Base your safety score on the content of the articles, crime reports, community development news, and quality of life indicators.
+- Base your school rating on school quality indicators, ratings from sources like GreatSchools or Niche, test scores, and education-related news.
 
 YOU WILL CHOOSE THE NEWS ARTICLES THAT YOU INCLUDE ACCORDING TO THE FOLLOWING CRITERIA (LISTED IN ORDER OF IMPORTANCE):
 - Choose sources that are specific news articles about the location, not generic news websites.
 - Choose sources that relevant and informative to the location.
 - Choose sources that are most recent.
                 """},
-                {"role": "user", "content": f"Analyze community news and safety for: {location_name}\n\n{articles_text}"},
+                {"role": "user", "content": f"Analyze community news and safety for: {location_name}\n\n{articles_text}\n{school_text}"},
             ],
             max_tokens=2048,
         )
@@ -143,7 +191,7 @@ YOU WILL CHOOSE THE NEWS ARTICLES THAT YOU INCLUDE ACCORDING TO THE FOLLOWING CR
         raise e
 
 agent = Agent(
-    name="Community News Agent",
+    name="Community Analysis Agent",
     seed="8792459787894231",
     port=8001,
     endpoint=["http://localhost:8001/submit"],
@@ -214,6 +262,8 @@ async def handle_status(ctx: Context) -> Dict[str, Any]:
         "positive_stories": [],
         "negative_stories": [],
         "safety_score": 0.0,
+        "school_rating": 0.0,
+        "overall_rating": 0.0,
         "agent_address": ctx.agent.address,
         "status": f"Community news agent is running",
     }
@@ -245,12 +295,21 @@ async def handle_analyze(ctx: Context, req: LocationNewsRequest) -> LocationNews
         # Parse the JSON response
         response_data = json.loads(cleaned_text)
 
+        # Extract scores
+        safety_score = float(response_data.get("safety_score", 0.0))
+        school_rating = float(response_data.get("school_rating", 0.0))
+
+        # Calculate overall rating as the mean of safety_score and school_rating
+        overall_rating = round((safety_score + school_rating) / 2, 1)
+
         return LocationNewsResponse(
             timestamp=int(time.time()),
             location=response_data.get("location", req.location_name),
             positive_stories=response_data.get("positive_stories", []),
             negative_stories=response_data.get("negative_stories", []),
-            safety_score=float(response_data.get("safety_score", 0.0)),
+            safety_score=safety_score,
+            school_rating=school_rating,
+            overall_rating=overall_rating,
             agent_address=ctx.agent.address,
         )
     except json.JSONDecodeError as e:
@@ -261,6 +320,8 @@ async def handle_analyze(ctx: Context, req: LocationNewsRequest) -> LocationNews
             positive_stories=[],
             negative_stories=[],
             safety_score=0.0,
+            school_rating=0.0,
+            overall_rating=0.0,
             agent_address=ctx.agent.address,
         )
     except Exception as e:
@@ -271,6 +332,8 @@ async def handle_analyze(ctx: Context, req: LocationNewsRequest) -> LocationNews
             positive_stories=[],
             negative_stories=[],
             safety_score=0.0,
+            school_rating=0.0,
+            overall_rating=0.0,
             agent_address=ctx.agent.address,
         )
 

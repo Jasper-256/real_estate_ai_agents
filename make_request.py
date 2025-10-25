@@ -31,5 +31,7 @@ for i, story in enumerate(data['negative_stories'], 1):
     print(f"   URL: {story.get('url', 'N/A')}\n")
 
 print(f"\nCOMMUNITY SAFETY SCORE: {data['safety_score']}/10.0")
-print(f"Agent Address: {data['agent_address']}")
+print(f"SCHOOL RATING: {data['school_rating']}/10.0")
+print(f"OVERALL RATING: {data['overall_rating']}/10.0")
+print(f"\nAgent Address: {data['agent_address']}")
 print(f"Timestamp: {data['timestamp']}")
