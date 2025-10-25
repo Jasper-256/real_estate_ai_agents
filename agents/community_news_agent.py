@@ -143,7 +143,7 @@ YOU WILL CHOOSE THE NEWS ARTICLES THAT YOU INCLUDE ACCORDING TO THE FOLLOWING CR
         raise e
 
 agent = Agent(
-    name="community-news-agent",
+    name="Community News Agent",
     seed="8792459787894231",
     port=8001,
     endpoint=["http://localhost:8001/submit"],
