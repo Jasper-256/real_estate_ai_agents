@@ -31,9 +31,15 @@ try:
     print("SELLER DOCUMENT PROCESSOR RESPONSE")
     print("=" * 80)
 
-    # print(f"\nDocuments Processed: {data['documents_processed']}")
+    print(f"\nDocuments Processed: {data['documents_processed']}")
     print(f"Agent Address: {data['agent_address']}")
     print(f"Timestamp: {data['timestamp']}")
+
+    if data.get('call_id'):
+        print(f"\n✓ VAPI Call Initiated Successfully!")
+        print(f"   Call ID: {data['call_id']}")
+    else:
+        print(f"\n✗ VAPI call was not initiated")
 
     if data['processing_errors']:
         print(f"\n⚠️  Processing Errors ({len(data['processing_errors'])}):")

@@ -20,6 +20,7 @@ load_dotenv()
 # Import the parse_pdf function
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from parse_pdf import parse_pdf
+from vapi_call_2 import initiate_vapi_call
 
 ### Seller Document Processor Agent
 ## This agent processes seller documents (inspection reports, disclosure forms, etc.)
@@ -35,6 +36,7 @@ class SystemPromptResponse(Model):
     agent_address: str
     documents_processed: int
     processing_errors: List[str]
+    call_id: str
 
 # Model configuration
 MODEL_NAME = "asi1-fast"
@@ -181,6 +183,14 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
                 # Generate system prompt
                 system_prompt = generate_phone_agent_prompt(processed_docs)
 
+                # Initiate VAPI call with the generated system prompt
+                try:
+                    call_id = initiate_vapi_call(system_prompt)
+                    call_status = f"\n\n✓ VAPI call initiated successfully!\nCall ID: {call_id}"
+                except Exception as e:
+                    ctx.logger.exception('Error initiating VAPI call')
+                    call_status = f"\n\n✗ Failed to initiate VAPI call: {str(e)}"
+
                 response = f"""Successfully processed {len(processed_docs)} document(s).
 
 GENERATED SYSTEM PROMPT FOR PHONE AGENT:
@@ -189,6 +199,7 @@ GENERATED SYSTEM PROMPT FOR PHONE AGENT:
 {'='*60}
 
 Processed documents: {', '.join([doc['filename'] for doc in processed_docs])}
+{call_status}
 """
                 if errors:
                     response += f"\n\nWarnings/Errors:\n" + "\n".join(errors)
@@ -223,6 +234,7 @@ async def handle_status(ctx: Context) -> Dict[str, Any]:
         "agent_address": ctx.agent.address,
         "documents_processed": 0,
         "processing_errors": [],
+        "call_id": "",
     }
 
 @agent.on_rest_post("/process", DocumentProcessRequest, SystemPromptResponse)
@@ -241,11 +253,21 @@ async def handle_process(ctx: Context, req: DocumentProcessRequest) -> SystemPro
                 agent_address=ctx.agent.address,
                 documents_processed=0,
                 processing_errors=errors,
+                call_id="",
             )
 
         # Generate system prompt
         system_prompt = generate_phone_agent_prompt(processed_docs)
         ctx.logger.info(f"Successfully generated system prompt from {len(processed_docs)} documents")
+
+        # Initiate VAPI call with the generated system prompt
+        call_id = ""
+        try:
+            call_id = initiate_vapi_call(system_prompt)
+            ctx.logger.info(f"Successfully initiated VAPI call with ID: {call_id}")
+        except Exception as e:
+            ctx.logger.exception('Error initiating VAPI call')
+            errors.append(f"Failed to initiate VAPI call: {str(e)}")
 
         return SystemPromptResponse(
             timestamp=int(time.time()),
@@ -253,6 +275,7 @@ async def handle_process(ctx: Context, req: DocumentProcessRequest) -> SystemPro
             agent_address=ctx.agent.address,
             documents_processed=len(processed_docs),
             processing_errors=errors,
+            call_id=call_id,
         )
     except Exception as e:
         ctx.logger.exception(f'Error in document processing: {e}')
@@ -262,6 +285,7 @@ async def handle_process(ctx: Context, req: DocumentProcessRequest) -> SystemPro
             agent_address=ctx.agent.address,
             documents_processed=0,
             processing_errors=[str(e)],
+            call_id="",
         )
 
 
