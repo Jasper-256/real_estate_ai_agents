@@ -35,11 +35,15 @@ class LocationNewsRequest(Model):
 class LocationNewsResponse(Model):
     timestamp: int
     location: str
+    overall_score: float
+    overall_explanation: str
+    safety_score: float
     positive_stories: list  # List of dicts: [{"title": str, "summary": str, "url": str}, ...]
     negative_stories: list  # List of dicts: [{"title": str, "summary": str, "url": str}, ...]
-    safety_score: float
     school_rating: float
-    overall_rating: float
+    school_explanation: str
+    housing_price_per_square_foot: int
+    average_house_size_square_foot: int
     agent_address: str
 
 # Model configuration
@@ -114,6 +118,35 @@ def fetch_school_articles(location_name: str) -> list:
         print(f"Error fetching school articles: {e}")
         return []
 
+# Helper function to fetch housing data using Tavily
+def fetch_housing_data(location_name: str) -> list:
+    """Fetch articles about housing prices and market data in a location using Tavily search."""
+    try:
+        # Search for housing prices, market data, and real estate information
+        search_query = f"{location_name} housing prices per square foot average home size zillow redfin realtor"
+        response = tavily_client.search(
+            query=search_query,
+            max_results=15,
+            search_depth="advanced",
+            include_domains=[],
+            exclude_domains=[]
+        )
+
+        articles = []
+        if response and 'results' in response:
+            for result in response['results']:
+                articles.append({
+                    'title': result.get('title', ''),
+                    'url': result.get('url', ''),
+                    'content': result.get('content', ''),
+                    'score': result.get('score', 0)
+                })
+
+        return articles
+    except Exception as e:
+        print(f"Error fetching housing data: {e}")
+        return []
+
 # Helper function to query the model
 def query_model(location_name: str) -> str:
     """Query the ASI:One model to get community news and safety analysis for a location."""
@@ -122,6 +155,8 @@ def query_model(location_name: str) -> str:
         articles = fetch_news_articles(location_name)
         # Fetch school-related articles
         school_articles = fetch_school_articles(location_name)
+        # Fetch housing data articles
+        housing_articles = fetch_housing_data(location_name)
 
         # Format the articles for the LLM
         articles_text = ""
@@ -145,6 +180,17 @@ def query_model(location_name: str) -> str:
         else:
             school_text = "No school-related articles found. Please provide a general school rating based on your knowledge.\n\n"
 
+        # Format housing articles for the LLM
+        housing_text = ""
+        if housing_articles:
+            housing_text = "Here are articles about housing and real estate in this location:\n\n"
+            for i, article in enumerate(housing_articles, 1):
+                housing_text += f"{i}. {article['title']}\n"
+                housing_text += f"   Content: {article['content'][:300]}...\n"
+                housing_text += f"   URL: {article['url']}\n\n"
+        else:
+            housing_text = "No housing-related articles found. Please provide general housing estimates based on your knowledge.\n\n"
+
         r = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
@@ -154,35 +200,48 @@ You MUST respond with ONLY valid JSON in the following format (no additional tex
 
 {
   "location": "location name",
-  "positive_stories": [
-    {"title": "story title 1", "summary": "brief summary", "url": "article url"},
-    {"title": "story title 2", "summary": "brief summary", "url": "article url"}
-  ],
-  "negative_stories": [
-    {"title": "story title 1", "summary": "brief summary", "url": "article url"},
-    {"title": "story title 2", "summary": "brief summary", "url": "article url"}
-  ],
-  "safety_score": 7.5,
-  "safety_explanation": "Brief explanation of safety score based on the news articles",
-  "school_rating": 8.2,
-  "school_explanation": "Brief explanation of school rating based on the education articles"
+  "overall": {
+    "score": 7.9,
+    "explanation": "Brief explanation of overall rating"
+  },
+  "safety": {
+    "score": 7.5,
+    "positive_stories": [
+      {"title": "story title 1", "summary": "brief summary", "url": "article url"},
+      {"title": "story title 2", "summary": "brief summary", "url": "article url"}
+    ],
+    "negative_stories": [
+      {"title": "story title 1", "summary": "brief summary", "url": "article url"},
+      {"title": "story title 2", "summary": "brief summary", "url": "article url"}
+    ]
+  },
+  "schools": {
+    "score": 8.2,
+    "explanation": "Brief explanation of school rating based on the education articles"
+  },
+  "housing_avg": {
+    "housing_price_per_square_foot": 739,
+    "average_house_size_square_foot": 1921
+  }
 }
 
 FOLLOW THESE INSTRUCTIONS STRICTLY:
-- The safety_score must be a number from 0-10 with precision to tenths (e.g., 7.3, 8.5).
-- The school_rating must be a number from 0-10 with precision to tenths (e.g., 7.3, 8.5).
-- Analyze the provided news articles and categorize them into positive and negative stories.
+- All scores (overall, safety, schools) must be numbers from 0-10 with precision to tenths (e.g., 7.3, 8.5).
+- The overall score should be calculated as the average of safety and schools scores.
+- Analyze the provided news articles and categorize them into positive and negative stories under the safety section.
 - The included url links to the real news articles.
-- Choose the 2 most relevant positive stories and 2 most relevant negative stories.
+- Choose the 2 most relevant positive stories and 2 most relevant negative stories for safety.
 - Base your safety score on the content of the articles, crime reports, community development news, and quality of life indicators.
-- Base your school rating on school quality indicators, ratings from sources like GreatSchools or Niche, test scores, and education-related news.
+- Base your schools score on school quality indicators, ratings from sources like GreatSchools or Niche, test scores, and education-related news.
+- Extract housing_price_per_square_foot and average_house_size_square_foot from the housing articles (as integer values).
+- If housing data cannot be found in the articles, provide reasonable estimates based on your knowledge of the area.
 
 YOU WILL CHOOSE THE NEWS ARTICLES THAT YOU INCLUDE ACCORDING TO THE FOLLOWING CRITERIA (LISTED IN ORDER OF IMPORTANCE):
 - Choose sources that are specific news articles about the location, not generic news websites.
-- Choose sources that relevant and informative to the location.
+- Choose sources that are relevant and informative to the location.
 - Choose sources that are most recent.
                 """},
-                {"role": "user", "content": f"Analyze community news and safety for: {location_name}\n\n{articles_text}\n{school_text}"},
+                {"role": "user", "content": f"Analyze community news and safety for: {location_name}\n\n{articles_text}\n{school_text}\n{housing_text}"},
             ],
             max_tokens=2048,
         )
@@ -259,11 +318,15 @@ async def handle_status(ctx: Context) -> Dict[str, Any]:
     return {
         "timestamp": int(time.time()),
         "location": "N/A",
+        "overall_score": 0.0,
+        "overall_explanation": "N/A",
+        "safety_score": 0.0,
         "positive_stories": [],
         "negative_stories": [],
-        "safety_score": 0.0,
         "school_rating": 0.0,
-        "overall_rating": 0.0,
+        "school_explanation": "N/A",
+        "housing_price_per_square_foot": 0,
+        "average_house_size_square_foot": 0,
         "agent_address": ctx.agent.address,
         "status": f"Community news agent is running",
     }
@@ -295,21 +358,24 @@ async def handle_analyze(ctx: Context, req: LocationNewsRequest) -> LocationNews
         # Parse the JSON response
         response_data = json.loads(cleaned_text)
 
-        # Extract scores
-        safety_score = float(response_data.get("safety_score", 0.0))
-        school_rating = float(response_data.get("school_rating", 0.0))
-
-        # Calculate overall rating as the mean of safety_score and school_rating
-        overall_rating = round((safety_score + school_rating) / 2, 1)
+        # Extract nested data
+        overall_data = response_data.get("overall", {})
+        safety_data = response_data.get("safety", {})
+        schools_data = response_data.get("schools", {})
+        housing_data = response_data.get("housing_avg", {})
 
         return LocationNewsResponse(
             timestamp=int(time.time()),
             location=response_data.get("location", req.location_name),
-            positive_stories=response_data.get("positive_stories", []),
-            negative_stories=response_data.get("negative_stories", []),
-            safety_score=safety_score,
-            school_rating=school_rating,
-            overall_rating=overall_rating,
+            overall_score=float(overall_data.get("score", 0.0)),
+            overall_explanation=overall_data.get("explanation", "N/A"),
+            safety_score=float(safety_data.get("score", 0.0)),
+            positive_stories=safety_data.get("positive_stories", []),
+            negative_stories=safety_data.get("negative_stories", []),
+            school_rating=float(schools_data.get("score", 0.0)),
+            school_explanation=schools_data.get("explanation", "N/A"),
+            housing_price_per_square_foot=int(housing_data.get("housing_price_per_square_foot", 0)),
+            average_house_size_square_foot=int(housing_data.get("average_house_size_square_foot", 0)),
             agent_address=ctx.agent.address,
         )
     except json.JSONDecodeError as e:
@@ -317,11 +383,15 @@ async def handle_analyze(ctx: Context, req: LocationNewsRequest) -> LocationNews
         return LocationNewsResponse(
             timestamp=int(time.time()),
             location=req.location_name,
+            overall_score=0.0,
+            overall_explanation="Error parsing response",
+            safety_score=0.0,
             positive_stories=[],
             negative_stories=[],
-            safety_score=0.0,
             school_rating=0.0,
-            overall_rating=0.0,
+            school_explanation="Error parsing response",
+            housing_price_per_square_foot=0,
+            average_house_size_square_foot=0,
             agent_address=ctx.agent.address,
         )
     except Exception as e:
@@ -329,11 +399,15 @@ async def handle_analyze(ctx: Context, req: LocationNewsRequest) -> LocationNews
         return LocationNewsResponse(
             timestamp=int(time.time()),
             location=req.location_name,
+            overall_score=0.0,
+            overall_explanation="Error querying model",
+            safety_score=0.0,
             positive_stories=[],
             negative_stories=[],
-            safety_score=0.0,
             school_rating=0.0,
-            overall_rating=0.0,
+            school_explanation="Error querying model",
+            housing_price_per_square_foot=0,
+            average_house_size_square_foot=0,
             agent_address=ctx.agent.address,
         )
 

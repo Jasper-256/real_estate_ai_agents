@@ -142,6 +142,29 @@ Remember: Your goal is to secure the best possible deal while maintaining a posi
 
     return system_prompt
 
+def process_and_generate(document_paths: List[str]) -> tuple[str, List[str], int, str]:
+    """
+    Core processing logic shared between protocol message and REST API handlers.
+    Returns tuple of (system_prompt, errors, documents_processed_count, call_id)
+    """
+    # Process documents
+    processed_docs, errors = process_documents(document_paths)
+
+    if not processed_docs:
+        return "", errors, 0, ""
+
+    # Generate system prompt
+    system_prompt = generate_phone_agent_prompt(processed_docs)
+
+    # Initiate VAPI call with the generated system prompt
+    call_id = ""
+    try:
+        call_id = initiate_vapi_call(system_prompt)
+    except Exception as e:
+        errors.append(f"Failed to initiate VAPI call: {str(e)}")
+
+    return system_prompt, errors, len(processed_docs), call_id
+
 agent = Agent(
     name="Seller Document Processor",
     seed="seller_doc_proc_123",
@@ -173,32 +196,21 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
     if not document_paths:
         response = "Please provide document paths to process (comma or newline separated)."
     else:
-        # Process documents
+        # Use shared processing logic
         try:
-            processed_docs, errors = process_documents(document_paths)
+            system_prompt, errors, docs_count, call_id = process_and_generate(document_paths)
 
-            if not processed_docs:
+            if docs_count == 0:
                 response = f"Failed to process any documents. Errors:\n" + "\n".join(errors)
             else:
-                # Generate system prompt
-                system_prompt = generate_phone_agent_prompt(processed_docs)
+                call_status = f"\n\n✓ VAPI call initiated successfully!\nCall ID: {call_id}" if call_id else "\n\n✗ Failed to initiate VAPI call"
 
-                # Initiate VAPI call with the generated system prompt
-                try:
-                    call_id = initiate_vapi_call(system_prompt)
-                    call_status = f"\n\n✓ VAPI call initiated successfully!\nCall ID: {call_id}"
-                except Exception as e:
-                    ctx.logger.exception('Error initiating VAPI call')
-                    call_status = f"\n\n✗ Failed to initiate VAPI call: {str(e)}"
-
-                response = f"""Successfully processed {len(processed_docs)} document(s).
+                response = f"""Successfully processed {docs_count} document(s).
 
 GENERATED SYSTEM PROMPT FOR PHONE AGENT:
 {'='*60}
 {system_prompt}
 {'='*60}
-
-Processed documents: {', '.join([doc['filename'] for doc in processed_docs])}
 {call_status}
 """
                 if errors:
@@ -243,10 +255,10 @@ async def handle_process(ctx: Context, req: DocumentProcessRequest) -> SystemPro
     ctx.logger.info(f"Received document processing request with {len(req.document_paths)} documents")
 
     try:
-        # Process documents
-        processed_docs, errors = process_documents(req.document_paths)
+        # Use shared processing logic
+        system_prompt, errors, docs_count, call_id = process_and_generate(req.document_paths)
 
-        if not processed_docs:
+        if docs_count == 0:
             return SystemPromptResponse(
                 timestamp=int(time.time()),
                 system_prompt="Failed to process any documents",
@@ -256,24 +268,15 @@ async def handle_process(ctx: Context, req: DocumentProcessRequest) -> SystemPro
                 call_id="",
             )
 
-        # Generate system prompt
-        system_prompt = generate_phone_agent_prompt(processed_docs)
-        ctx.logger.info(f"Successfully generated system prompt from {len(processed_docs)} documents")
-
-        # Initiate VAPI call with the generated system prompt
-        call_id = ""
-        try:
-            call_id = initiate_vapi_call(system_prompt)
+        ctx.logger.info(f"Successfully generated system prompt from {docs_count} documents")
+        if call_id:
             ctx.logger.info(f"Successfully initiated VAPI call with ID: {call_id}")
-        except Exception as e:
-            ctx.logger.exception('Error initiating VAPI call')
-            errors.append(f"Failed to initiate VAPI call: {str(e)}")
 
         return SystemPromptResponse(
             timestamp=int(time.time()),
             system_prompt=system_prompt,
             agent_address=ctx.agent.address,
-            documents_processed=len(processed_docs),
+            documents_processed=docs_count,
             processing_errors=errors,
             call_id=call_id,
         )
