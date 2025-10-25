@@ -37,14 +37,36 @@ class QuestionResponse(Model):
 
 # the subject that this assistant is an expert in
 subject_matter = "the sun"
- 
+
+# Model configuration
+MODEL_NAME = "asi1-fast"
+
 client = OpenAI(
     # By default, we are using the ASI:One LLM endpoint and model
     base_url='https://api.asi1.ai/v1',
- 
+
     # You can get an ASI:One api key by creating an account at https://asi1.ai/dashboard/api-keys
     api_key=os.getenv('FETCH_AI_API_KEY'),
 )
+
+# Helper function to query the model
+def query_model(question: str) -> str:
+    """Query the ASI:One model with a question about the subject matter."""
+    try:
+        r = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": f"""
+        You are a helpful assistant who only answers questions about {subject_matter}. If the user asks
+        about any other topics, you should politely say that you do not know about them.
+                """},
+                {"role": "user", "content": question},
+            ],
+            max_tokens=2048,
+        )
+        return str(r.choices[0].message.content)
+    except Exception as e:
+        raise e
 
 agent = Agent(
     name="ASI-agent",
@@ -77,19 +99,7 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
     # query the model based on the user question
     response = 'I am afraid something went wrong and I am unable to answer your question at the moment'
     try:
-        r = client.chat.completions.create(
-            model="asi1-fast",
-            messages=[
-                {"role": "system", "content": f"""
-        You are a helpful assistant who only answers questions about {subject_matter}. If the user asks 
-        about any other topics, you should politely say that you do not know about them.
-                """},
-                {"role": "user", "content": text},
-            ],
-            max_tokens=2048,
-        )
- 
-        response = str(r.choices[0].message.content)
+        response = query_model(text)
     except:
         ctx.logger.exception('Error querying model')
  
@@ -139,19 +149,7 @@ async def handle_ask(ctx: Context, req: QuestionRequest) -> QuestionResponse:
     # Query the model with the user's question
     answer = 'I am afraid something went wrong and I am unable to answer your question at the moment'
     try:
-        r = client.chat.completions.create(
-            model="asi1-fast",
-            messages=[
-                {"role": "system", "content": f"""
-        You are a helpful assistant who only answers questions about {subject_matter}. If the user asks
-        about any other topics, you should politely say that you do not know about them.
-                """},
-                {"role": "user", "content": req.question},
-            ],
-            max_tokens=2048,
-        )
-
-        answer = str(r.choices[0].message.content)
+        answer = query_model(req.question)
         ctx.logger.info(f"Generated answer: {answer}")
     except Exception as e:
         ctx.logger.exception(f'Error querying model: {e}')
