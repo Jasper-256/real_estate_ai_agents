@@ -41,7 +41,7 @@ client = OpenAI(
 tavily = TavilyClient()
 
 agent = Agent(
-    name="general_agent",
+    name="Real Estate Intern",
     seed="general_agent_seed_12345",
     mailbox=True,
 )
