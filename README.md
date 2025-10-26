@@ -14,6 +14,8 @@ A multi-agent system for intelligent real estate property search and analysis ac
 - [Local Discovery Agent](https://agentverse.ai/agents/details/agent1q0a0ctl6xt9pqgawtvts9m3p9fn0hhxhd4zm5l2a4r2twqqsssk45zjypfq/profile)
 - [Mapbox Agent](https://agentverse.ai/agents/details/agent1qfwz4lx0rj2a7dsak4wswmnanql8u9yk9dvf97jy73z8vh5yknh6z0ncn2y/profile)
 - [Research Agent](https://agentverse.ai/agents/details/agent1qd6snf9k3kd68djglmfzd9kcjnjtv43gn7dpnt9zj4ta6w2n9fyfvj09hmh/profile)
+- [Prober Agent](https://agentverse.ai/agents/details/agent1qvrd39sql7fw6pz4kz7eq0gus8q5sup90x8h0zddyq4063vyh4v6z90vnys/profile)
+- [Vapi Negotiator](https://agentverse.ai/agents/details/agent1qf94mszakc8gj3qq9nyfwc5gn7hne48kld2crzqfag0y0xu3jfjy6hkfxaw/profile)
 
 ## Core Agents
 
@@ -37,6 +39,12 @@ Finds Points of Interest (POIs) near properties using Mapbox Search Box API. Dis
 
 ### Community Analysis Agent
 Analyzes community quality using Tavily search to gather news articles, school ratings, and housing data. Provides scores for overall quality, safety, and schools (0-10 scale), along with positive/negative news stories, housing price per sqft, and average house size.
+
+### Prober Agent
+Gathers intelligence about properties for negotiation leverage by identifying red flags, weaknesses, and negative information. Uses Tavily to search property history and BrightData to scrape detailed content. Analyzes time on market, price reductions, property issues, owner situations, and market conditions to generate a leverage score and actionable findings for buyers to negotiate lower prices.
+
+### Vapi Negotiator
+Handles AI phone call negotiations with listing agents on behalf of buyers. Makes actual phone calls using the Vapi platform to negotiate property prices based on intelligence gathered by the Prober Agent. Uses a strategic system prompt with negotiation tactics, maintains professional conversation, and provides call summaries with outcomes.
 
 ## Supporting Components
 
