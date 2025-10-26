@@ -1,57 +1,76 @@
 """
 General Agent - Handles general questions about areas, neighborhoods, etc.
 """
-from uagents import Agent, Context
-from .models import GeneralRequest, GeneralResponse
-from .llm_client import SimpleLLMAgent
-from .tavily_client import TavilyClient
+from datetime import datetime
+from uuid import uuid4
+
+from openai import OpenAI
+from uagents import Context, Protocol, Agent
+from uagents_core.contrib.protocols.chat import (
+    ChatAcknowledgement,
+    ChatMessage,
+    EndSessionContent,
+    StartSessionContent,
+    TextContent,
+    chat_protocol_spec,
+)
+
+try:
+    from .tavily_client import TavilyClient
+except ImportError:
+    from tavily_client import TavilyClient
 
 
-def create_general_agent(port: int = 8003):
-    """Create and configure the general agent"""
+def create_text_chat(text: str, end_session: bool = False) -> ChatMessage:
+    content = [TextContent(type="text", text=text)]
+    if end_session:
+        content.append(EndSessionContent(type="end-session"))
+    return ChatMessage(timestamp=datetime.utcnow(), msg_id=uuid4(), content=content)
 
-    agent = Agent(
-        name="general_agent",
-        port=port,
-        seed="general_agent_seed",
-        endpoint=[f"http://localhost:{port}/submit"]
+
+# OpenAI client for ASI-1
+client = OpenAI(
+    # By default, we are using the ASI-1 LLM endpoint and model
+    base_url='https://api.asi1.ai/v1',
+
+    # You can get an ASI-1 api key by creating an account at https://asi1.ai/dashboard/api-keys
+    api_key='sk_80bae86f09db46f69cc178374c48f0766d57bd72a8164c728f52625c9105ec55',
+)
+
+# Tavily client for search
+tavily = TavilyClient()
+
+agent = Agent(
+    name="general_agent",
+    seed="general_agent_seed_12345",
+    mailbox=True,
+)
+
+# We create a new protocol which is compatible with the chat protocol spec. This ensures
+# compatibility between agents
+protocol = Protocol(spec=chat_protocol_spec)
+
+
+# We define the handler for the chat messages that are sent to your agent
+@protocol.on_message(ChatMessage)
+async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
+    # send the acknowledgement for receiving the message
+    await ctx.send(
+        sender,
+        ChatAcknowledgement(timestamp=datetime.now(), acknowledged_msg_id=msg.msg_id),
     )
 
-    # LLM client for answering questions
-    llm_client = SimpleLLMAgent(
-        "general_agent",
-        system_prompt="""You are a knowledgeable Bay Area real estate assistant who answers general questions about neighborhoods, areas, schools, amenities, and local information.
+    text = msg.text()
+    if not text:
+        return
 
-Your job is to provide helpful, accurate information based on search results.
-
-CRITICAL RULES:
-- Answer questions conversationally and naturally
-- Use the search results to provide accurate information
-- If search results don't contain the answer, say so honestly
-- Focus on information relevant to someone looking for a home
-- Be concise but informative
-
-Respond with a JSON object in this format:
-{
-  "answer": "<your detailed answer to the user's question>"
-}"""
-    )
-
-    # Tavily client
-    tavily = TavilyClient()
-
-    @agent.on_event("startup")
-    async def startup(ctx: Context):
-        ctx.logger.info(f"General Agent started at {ctx.agent.address}")
-
-    @agent.on_message(model=GeneralRequest)
-    async def handle_request(ctx: Context, sender: str, msg: GeneralRequest):
-        ctx.logger.info(f"General agent received question from {sender}: {msg.question}")
+    try:
+        ctx.logger.info(f"Received question: {text}")
 
         # Perform Tavily search for general information
-        search_query = f"{msg.question}"
+        search_query = f"{text} Bay Area"
 
-        ctx.logger.info(f"Search query: {search_query}")
+        ctx.logger.info(f"Searching with query: {search_query}")
 
         search_results = await tavily.search(
             query=search_query,
@@ -61,15 +80,12 @@ Respond with a JSON object in this format:
 
         if not search_results["success"]:
             ctx.logger.error(f"Tavily search failed: {search_results['error']}")
-            response = GeneralResponse(
-                answer=f"I'm having trouble searching for that information right now. Error: {search_results['error']}",
-                session_id=msg.session_id
-            )
-            await ctx.send(sender, response)
+            response = f"I'm having trouble searching for that information right now. Error: {search_results['error']}"
+            await ctx.send(sender, create_text_chat(response, end_session=True))
             return
-    
+
         # Build context for LLM from search results
-        context = f"User Question: {msg.question}\n\n"
+        context = f"User Question: {text}\n\n"
         context += "Search Results:\n\n"
 
         for idx, result in enumerate(search_results["results"][:5], 1):
@@ -78,40 +94,45 @@ Respond with a JSON object in this format:
             context += f"URL: {result.get('url', 'N/A')}\n"
             context += f"Content: {result.get('content', 'N/A')[:800]}...\n\n"
 
-        prompt = f"""{context}
+        # Query the LLM
+        r = client.chat.completions.create(
+            model="asi1-mini",
+            messages=[
+                {"role": "system", "content": """You are a knowledgeable Bay Area real estate assistant who answers general questions about neighborhoods, areas, schools, amenities, and local information.
 
-Based on the search results above, answer the user's question: "{msg.question}"
+Your job is to provide helpful, accurate information based on search results.
 
-Provide a clear, helpful answer. If the search results don't contain enough information to answer the question, say so honestly.
+CRITICAL RULES:
+- Answer questions conversationally and naturally
+- Use the search results to provide accurate information
+- If search results don't contain the answer, say so honestly
+- Focus on information relevant to someone looking for a home
+- Be concise but informative"""},
+                {"role": "user", "content": f"{context}\n\nBased on the search results above, answer the user's question: \"{text}\"\n\nProvide a clear, helpful answer. If the search results don't contain enough information to answer the question, say so honestly."},
+            ],
+            max_tokens=800,
+            temperature=0.3,
+        )
 
-Respond with a JSON object as specified in your instructions."""
+        response = str(r.choices[0].message.content)
+        ctx.logger.info("Generated answer for general question")
 
-        # Query LLM
-        result = await llm_client.query_llm(prompt, temperature=0.3, max_tokens=800)
+    except Exception as e:
+        ctx.logger.exception('Error processing request')
+        response = f"An error occurred while processing the request. Please try again later. {e}"
 
-        if result["success"]:
-            parsed = llm_client.parse_json_response(result["content"])
+    await ctx.send(sender, create_text_chat(response, end_session=True))
 
-            if parsed and "answer" in parsed:
-                response = GeneralResponse(
-                    answer=parsed["answer"],
-                    session_id=msg.session_id
-                )
-                ctx.logger.info("Generated answer for general question")
-            else:
-                ctx.logger.warning("Failed to parse LLM response")
-                response = GeneralResponse(
-                    answer="I apologize, but I'm having trouble formulating an answer right now. Could you try rephrasing your question?",
-                    session_id=msg.session_id
-                )
 
-            await ctx.send(sender, response)
-        else:
-            ctx.logger.error(f"LLM error: {result['content']}")
-            response = GeneralResponse(
-                answer="I'm having trouble processing your question right now. Please try again.",
-                session_id=msg.session_id
-            )
-            await ctx.send(sender, response)
+@protocol.on_message(ChatAcknowledgement)
+async def handle_ack(ctx: Context, sender: str, msg: ChatAcknowledgement):
+    # we are not interested in the acknowledgements for this example, but they can be useful to
+    # implement read receipts, for example.
+    pass
 
-    return agent
+
+# attach the protocol to the agent
+agent.include(protocol, publish_manifest=True)
+
+if __name__ == "__main__":
+    agent.run()

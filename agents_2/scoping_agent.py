@@ -98,16 +98,6 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
         ChatAcknowledgement(timestamp=datetime.now(), acknowledged_msg_id=msg.msg_id),
     )
 
-    # greet if a session starts
-    if any(isinstance(item, StartSessionContent) for item in msg.content):
-        await ctx.send(
-            sender,
-            create_text_chat("Hi! I'm a real estate agent helping you find homes in the San Francisco Bay Area. What are you looking for?", end_session=False),
-        )
-        # Initialize conversation history
-        conversations[sender] = []
-        return
-
     text = msg.text()
     if not text:
         return

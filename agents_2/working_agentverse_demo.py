@@ -57,13 +57,6 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
         ChatAcknowledgement(timestamp=datetime.now(), acknowledged_msg_id=msg.msg_id),
     )
 
-    # 2) greet if a session starts
-    if any(isinstance(item, StartSessionContent) for item in msg.content):
-        await ctx.send(
-            sender,
-            create_text_chat(f"Hi! Im a {subject_matter} expert, how can I help?", end_session=False),
-        )
-
     text = msg.text()
     if not text:
         return
