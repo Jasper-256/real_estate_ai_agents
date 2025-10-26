@@ -79,6 +79,93 @@ sessions = {}
 protocol = Protocol(spec=chat_protocol_spec)
 
 
+# Helper function to send final response to user
+async def send_final_response(ctx: Context, session_id: str):
+    """Build and send the final response with all collected data"""
+    if session_id not in sessions:
+        ctx.logger.error(f"Session {session_id} not found")
+        return
+
+    session = sessions[session_id]
+    user_sender = session.get("user_sender")
+
+    if not user_sender:
+        ctx.logger.error(f"No user sender found for session {session_id}")
+        return
+
+    # Get all the collected data
+    scoping_msg = session.get("scoping")
+    research_msg = session.get("research")
+    geocoded_results = session.get("geocoded_results", [])
+    poi_results = session.get("poi_results", [])
+    community_msg = session.get("community_analysis")
+
+    if not research_msg:
+        ctx.logger.error("No research data found")
+        return
+
+    # Merge geocoded data, images, and POIs into raw_search_results
+    enhanced_results = []
+    result_images = research_msg.result_images if research_msg.result_images else []
+
+    for idx, result in enumerate(research_msg.raw_search_results[:5]):
+        enhanced_result = dict(result)
+
+        # Find matching geocoded data
+        geocoded = next((g for g in geocoded_results if g["index"] == idx), None)
+        if geocoded:
+            enhanced_result["latitude"] = geocoded["latitude"]
+            enhanced_result["longitude"] = geocoded["longitude"]
+            enhanced_result["address"] = geocoded["address"]
+
+        # Add image URL if available
+        image_data = next((img for img in result_images if img["index"] == idx), None)
+        if image_data:
+            enhanced_result["image_url"] = image_data["image_url"]
+
+        # Add POIs if available
+        poi_data = next((p for p in poi_results if p["listing_index"] == idx), None)
+        if poi_data:
+            enhanced_result["pois"] = poi_data["pois"]
+        else:
+            enhanced_result["pois"] = []
+
+        enhanced_results.append(enhanced_result)
+
+    # Build response data
+    response_data = {
+        "requirements": scoping_msg.requirements.dict() if scoping_msg and scoping_msg.requirements else {},
+        "properties": [p.dict() for p in research_msg.properties],
+        "search_summary": research_msg.search_summary,
+        "total_found": research_msg.total_found,
+        "raw_search_results": enhanced_results,
+    }
+
+    # Add community analysis if available
+    if community_msg:
+        response_data["community_analysis"] = {
+            "location": community_msg.location,
+            "overall_score": community_msg.overall_score,
+            "overall_explanation": community_msg.overall_explanation,
+            "safety_score": community_msg.safety_score,
+            "positive_stories": community_msg.positive_stories,
+            "negative_stories": community_msg.negative_stories,
+            "school_rating": community_msg.school_rating,
+            "school_explanation": community_msg.school_explanation,
+            "housing_price_per_square_foot": community_msg.housing_price_per_square_foot,
+            "average_house_size_square_foot": community_msg.average_house_size_square_foot
+        }
+
+    # Format response as readable text
+    response_text = f"✅ {research_msg.search_summary}\n\n"
+    response_text += f"Found {research_msg.total_found} properties with complete details.\n\n"
+    response_text += f"Full data:\n{json.dumps(response_data, indent=2)}"
+
+    # Send final response
+    await ctx.send(user_sender, create_text_chat(response_text, end_session=True))
+    ctx.logger.info(f"Sent final response to {user_sender}")
+
+
 @coordinator.on_event("startup")
 async def startup(ctx: Context):
     ctx.logger.info("=" * 60)
@@ -104,10 +191,15 @@ async def handle_scoping(ctx: Context, sender: str, msg: ScopingResponse):
 
     sessions[msg.session_id]["scoping"] = msg
 
+    # Get user sender to send updates
+    user_sender = sessions[msg.session_id].get("user_sender")
+
     # Route based on intent
     if msg.is_general_question and msg.general_question:
         # Forward to general agent
         ctx.logger.info(f"Forwarding to general agent with question: {msg.general_question}")
+        if user_sender:
+            await ctx.send(user_sender, create_text_chat("💬 Answering your question...", end_session=False))
         await ctx.send(
             general_address,
             GeneralRequest(
@@ -118,6 +210,8 @@ async def handle_scoping(ctx: Context, sender: str, msg: ScopingResponse):
     elif msg.is_complete and msg.requirements:
         # Forward to research agent for property search
         ctx.logger.info(f"Forwarding to research agent")
+        if user_sender:
+            await ctx.send(user_sender, create_text_chat("🏠 Searching for properties...", end_session=False))
         await ctx.send(
             research_address,
             ResearchRequest(
@@ -136,6 +230,10 @@ async def handle_scoping(ctx: Context, sender: str, msg: ScopingResponse):
                     session_id=msg.session_id
                 )
             )
+    else:
+        # Still gathering requirements - send scoping message to user
+        if user_sender and msg.agent_message:
+            await ctx.send(user_sender, create_text_chat(msg.agent_message, end_session=False))
 
 
 @coordinator.on_message(model=ResearchResponse)
@@ -151,11 +249,18 @@ async def handle_research(ctx: Context, sender: str, msg: ResearchResponse):
     sessions[msg.session_id]["poi_results"] = []
     sessions[msg.session_id]["poi_count"] = 0
 
+    user_sender = sessions[msg.session_id].get("user_sender")
+
     # If we have search results, geocode the first 5
     if msg.raw_search_results and len(msg.raw_search_results) > 0:
         # Limit to 5 for faster processing
         results_to_geocode = msg.raw_search_results[:5]
+        sessions[msg.session_id]["expected_results_count"] = len(results_to_geocode)
+
         ctx.logger.info(f"Geocoding {len(results_to_geocode)} results")
+
+        if user_sender:
+            await ctx.send(user_sender, create_text_chat(f"📍 Found {msg.total_found} properties! Gathering location details...", end_session=False))
 
         for idx, result in enumerate(results_to_geocode):
             address = result.get("title", "")
@@ -171,6 +276,9 @@ async def handle_research(ctx: Context, sender: str, msg: ResearchResponse):
                 )
     else:
         ctx.logger.info("No search results to geocode")
+        # Send response immediately if no results
+        if user_sender:
+            await ctx.send(user_sender, create_text_chat(msg.search_summary, end_session=True))
 
 
 @coordinator.on_message(model=MapboxResponse)
@@ -246,6 +354,17 @@ async def handle_local_discovery(ctx: Context, sender: str, msg: LocalDiscoveryR
 
     sessions[msg.session_id]["poi_count"] = sessions[msg.session_id].get("poi_count", 0) + 1
 
+    # Check if all POIs are collected
+    expected_count = sessions[msg.session_id].get("expected_results_count", 0)
+    poi_count = sessions[msg.session_id]["poi_count"]
+
+    ctx.logger.info(f"POI progress: {poi_count}/{expected_count}")
+
+    # If all POIs collected, send final response
+    if poi_count >= expected_count and expected_count > 0:
+        ctx.logger.info("All POIs collected! Building final response...")
+        await send_final_response(ctx, msg.session_id)
+
 
 @coordinator.on_message(model=GeneralResponse)
 async def handle_general(ctx: Context, sender: str, msg: GeneralResponse):
@@ -275,7 +394,7 @@ async def handle_community_analysis(ctx: Context, sender: str, msg: CommunityAna
 # Chat protocol handlers
 @protocol.on_message(ChatMessage)
 async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
-    # Send acknowledgement
+    # Send acknowledgement immediately
     await ctx.send(
         sender,
         ChatAcknowledgement(timestamp=datetime.now(), acknowledged_msg_id=msg.msg_id),
@@ -285,8 +404,8 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
     if not text:
         return
 
-    # Generate session ID from sender and timestamp
-    session_id = f"{sender}_{int(datetime.now().timestamp())}"
+    # Use sender address as session ID for persistent conversation history
+    session_id = sender
 
     ctx.logger.info(f"Received chat message from {sender}: {text}")
     ctx.logger.info(f"Using session ID: {session_id}")
@@ -294,10 +413,17 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
     # Initialize session and store sender for later response
     if session_id not in sessions:
         sessions[session_id] = {}
+        ctx.logger.info(f"New session created for {sender}")
+    else:
+        ctx.logger.info(f"Continuing existing session for {sender}")
+
     sessions[session_id]["user_sender"] = sender
 
     try:
-        # Send to scoping agent first
+        # Send initial status update
+        await ctx.send(sender, create_text_chat("🔍 Processing your request...", end_session=False))
+
+        # Send to scoping agent - it will maintain conversation history by session_id
         ctx.logger.info("Routing message to scoping agent")
         await ctx.send(
             scoping_address,
@@ -307,133 +433,7 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
             )
         )
 
-        # Wait for scoping response
-        for _ in range(60):
-            if "scoping" in sessions[session_id]:
-                break
-            await asyncio.sleep(0.5)
-        else:
-            await ctx.send(sender, create_text_chat("Timeout waiting for response. Please try again.", end_session=True))
-            return
-
-        scoping_msg = sessions[session_id]["scoping"]
-
-        # Handle general question - response sent in handle_general
-        if scoping_msg.is_general_question:
-            ctx.logger.info("Waiting for general agent response")
-            for _ in range(60):
-                if "general" in sessions[session_id]:
-                    break
-                await asyncio.sleep(0.5)
-            return  # Response already sent in handle_general
-
-        # Handle property search
-        if scoping_msg.is_complete and scoping_msg.requirements:
-            ctx.logger.info("Waiting for research results")
-
-            for _ in range(60):
-                if "research" in sessions[session_id]:
-                    break
-                await asyncio.sleep(0.5)
-
-            # Also wait for community analysis if we have a community name
-            if scoping_msg.community_name:
-                ctx.logger.info("Waiting for community analysis results")
-                for _ in range(60):
-                    if "community_analysis" in sessions[session_id]:
-                        break
-                    await asyncio.sleep(0.5)
-
-            if "research" in sessions[session_id]:
-                research_msg = sessions[session_id]["research"]
-
-                # Wait for Mapbox geocoding if we have search results
-                if research_msg.raw_search_results and len(research_msg.raw_search_results) > 0:
-                    results_count = min(len(research_msg.raw_search_results), 5)
-                    ctx.logger.info(f"Waiting for {results_count} geocoding results")
-
-                    # Wait up to 15 seconds for all geocoding to complete
-                    for _ in range(30):
-                        geocoding_count = sessions[session_id].get("geocoding_count", 0)
-                        if geocoding_count >= results_count:
-                            ctx.logger.info(f"All {results_count} results geocoded")
-                            break
-                        await asyncio.sleep(0.5)
-
-                    # Wait for POI searches to complete
-                    ctx.logger.info(f"Waiting for POI results for {results_count} listings")
-                    for _ in range(40):
-                        poi_count = sessions[session_id].get("poi_count", 0)
-                        if poi_count >= results_count:
-                            ctx.logger.info(f"All {results_count} POI searches complete")
-                            break
-                        await asyncio.sleep(0.5)
-
-                # Merge geocoded data, images, and POIs into raw_search_results
-                enhanced_results = []
-                geocoded_results = sessions[session_id].get("geocoded_results", [])
-                result_images = research_msg.result_images if research_msg.result_images else []
-                poi_results = sessions[session_id].get("poi_results", [])
-
-                for idx, result in enumerate(research_msg.raw_search_results[:5]):
-                    enhanced_result = dict(result)
-
-                    # Find matching geocoded data
-                    geocoded = next((g for g in geocoded_results if g["index"] == idx), None)
-                    if geocoded:
-                        enhanced_result["latitude"] = geocoded["latitude"]
-                        enhanced_result["longitude"] = geocoded["longitude"]
-                        enhanced_result["address"] = geocoded["address"]
-
-                    # Add image URL if available
-                    image_data = next((img for img in result_images if img["index"] == idx), None)
-                    if image_data:
-                        enhanced_result["image_url"] = image_data["image_url"]
-
-                    # Add POIs if available
-                    poi_data = next((p for p in poi_results if p["listing_index"] == idx), None)
-                    if poi_data:
-                        enhanced_result["pois"] = poi_data["pois"]
-                    else:
-                        enhanced_result["pois"] = []
-
-                    enhanced_results.append(enhanced_result)
-
-                # Build response data
-                response_data = {
-                    "requirements": scoping_msg.requirements.dict(),
-                    "properties": [p.dict() for p in research_msg.properties],
-                    "search_summary": research_msg.search_summary,
-                    "total_found": research_msg.total_found,
-                    "raw_search_results": enhanced_results,
-                }
-
-                # Add community analysis if available
-                if "community_analysis" in sessions[session_id]:
-                    community_msg = sessions[session_id]["community_analysis"]
-                    response_data["community_analysis"] = {
-                        "location": community_msg.location,
-                        "overall_score": community_msg.overall_score,
-                        "overall_explanation": community_msg.overall_explanation,
-                        "safety_score": community_msg.safety_score,
-                        "positive_stories": community_msg.positive_stories,
-                        "negative_stories": community_msg.negative_stories,
-                        "school_rating": community_msg.school_rating,
-                        "school_explanation": community_msg.school_explanation,
-                        "housing_price_per_square_foot": community_msg.housing_price_per_square_foot,
-                        "average_house_size_square_foot": community_msg.average_house_size_square_foot
-                    }
-
-                # Format response as readable text
-                response_text = f"{research_msg.search_summary}\n\n"
-                response_text += f"Found {research_msg.total_found} properties.\n\n"
-                response_text += f"Here's the detailed data:\n{json.dumps(response_data, indent=2)}"
-
-                await ctx.send(sender, create_text_chat(response_text, end_session=True))
-                return
-
-        # Return scoping conversation (still gathering requirements)
-        await ctx.send(sender, create_text_chat(scoping_msg.agent_message, end_session=False))
+        # Don't wait - let the individual handlers send responses as they complete
 
     except Exception as e:
         ctx.logger.error(f"Error: {e}")
