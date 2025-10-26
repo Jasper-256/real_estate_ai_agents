@@ -7,15 +7,18 @@ A multi-agent system for intelligent real estate property search and analysis ac
 
 ## Deployed Agents on Agentverse
 
+- [Real Estate Agent (Coordinator)](https://agentverse.ai/agents/details/agent1qg0lmv734dqg402qsrma08jvepjqgpf3krz733nsckstptr3e9a82haqldl/profile)
 - [Scoping Agent](https://agentverse.ai/agents/details/agent1qtuv3paxfpc7r44x5xxhttlgurtm7rkdf97z0dgfr34r8gf0zp0asyhtnse/profile)
 - [Community Analysis Agent](https://agentverse.ai/agents/details/agent1q2d44gnyd9rfm4dwxaje96v8q3m30nhckpwkn5zte38ecn6y8k6vyjavunw/profile)
 - [Real Estate Intern](https://agentverse.ai/agents/details/agent1qv5xsu3s92n8wxe2zq0gx425jsfxcyz3aeedtntp7f45argyturk6m0ez45/profile)
 - [Local Discovery Agent](https://agentverse.ai/agents/details/agent1q0a0ctl6xt9pqgawtvts9m3p9fn0hhxhd4zm5l2a4r2twqqsssk45zjypfq/profile)
 - [Mapbox Agent](https://agentverse.ai/agents/details/agent1qfwz4lx0rj2a7dsak4wswmnanql8u9yk9dvf97jy73z8vh5yknh6z0ncn2y/profile)
 - [Research Agent](https://agentverse.ai/agents/details/agent1qd6snf9k3kd68djglmfzd9kcjnjtv43gn7dpnt9zj4ta6w2n9fyfvj09hmh/profile)
-- [Real Estate Agent (Coordinator)](https://agentverse.ai/agents/details/agent1qg0lmv734dqg402qsrma08jvepjqgpf3krz733nsckstptr3e9a82haqldl/profile)
 
 ## Core Agents
+
+### Real Estate Agent (Coordinator)
+Orchestrates the entire workflow by routing messages between agents, managing session state, collecting geocoded data for multiple properties, generating static map images with numbered markers, and assembling comprehensive final responses with all property details.
 
 ### Scoping Agent
 Conversationally collects user requirements for property search including budget range, bedrooms, bathrooms, and location. Routes requests to appropriate agents based on whether user is asking general questions or searching for properties.
@@ -34,9 +37,6 @@ Finds Points of Interest (POIs) near properties using Mapbox Search Box API. Dis
 
 ### Community Analysis Agent
 Analyzes community quality using Tavily search to gather news articles, school ratings, and housing data. Provides scores for overall quality, safety, and schools (0-10 scale), along with positive/negative news stories, housing price per sqft, and average house size.
-
-### Coordinator Agent (main.py)
-Orchestrates the entire workflow by routing messages between agents, managing session state, collecting geocoded data for multiple properties, generating static map images with numbered markers, and assembling comprehensive final responses with all property details.
 
 ## Supporting Components
 
