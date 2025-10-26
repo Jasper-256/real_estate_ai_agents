@@ -97,14 +97,13 @@ async def send_final_response(ctx: Context, session_id: str):
     scoping_msg = session.get("scoping")
     research_msg = session.get("research")
     geocoded_results = session.get("geocoded_results", [])
-    poi_results = session.get("poi_results", [])
     community_msg = session.get("community_analysis")
 
     if not research_msg:
         ctx.logger.error("No research data found")
         return
 
-    # Merge geocoded data, images, and POIs into raw_search_results
+    # Merge geocoded data and images into raw_search_results
     enhanced_results = []
     result_images = research_msg.result_images if research_msg.result_images else []
 
@@ -123,43 +122,99 @@ async def send_final_response(ctx: Context, session_id: str):
         if image_data:
             enhanced_result["image_url"] = image_data["image_url"]
 
-        # Add POIs if available
-        poi_data = next((p for p in poi_results if p["listing_index"] == idx), None)
-        if poi_data:
-            enhanced_result["pois"] = poi_data["pois"]
-        else:
-            enhanced_result["pois"] = []
-
         enhanced_results.append(enhanced_result)
 
-    # Build response data
-    response_data = {
-        "requirements": scoping_msg.requirements.dict() if scoping_msg and scoping_msg.requirements else {},
-        "properties": [p.dict() for p in research_msg.properties],
-        "search_summary": research_msg.search_summary,
-        "total_found": research_msg.total_found,
-        "raw_search_results": enhanced_results,
-    }
+    # Format response as structured markdown
+    response_text = f"# 🏠 Property Search Results\n\n"
+    response_text += f"**{research_msg.search_summary}**\n\n"
+    response_text += f"Found **{research_msg.total_found}** properties matching your criteria.\n\n"
+    response_text += "---\n\n"
+
+    # Format each property
+    for idx, result in enumerate(enhanced_results, 1):
+        response_text += f"## Property {idx}\n\n"
+
+        # Title/Address
+        if result.get("title"):
+            response_text += f"### 📍 {result['title']}\n\n"
+
+        # Image
+        if result.get("image_url"):
+            response_text += f"![Property Image]({result['image_url']})\n\n"
+
+        # Price
+        if result.get("price"):
+            response_text += f"**💰 Price:** {result['price']}\n\n"
+
+        # Beds/Baths/Sqft
+        details = []
+        if result.get("beds"):
+            details.append(f"{result['beds']} beds")
+        if result.get("baths"):
+            details.append(f"{result['baths']} baths")
+        if result.get("sqft"):
+            details.append(f"{result['sqft']} sqft")
+
+        if details:
+            response_text += f"**🏡 Details:** {' | '.join(details)}\n\n"
+
+        # Coordinates
+        if result.get("latitude") and result.get("longitude"):
+            response_text += f"**📌 Coordinates:** {result['latitude']}, {result['longitude']}\n\n"
+
+        # Link
+        if result.get("link"):
+            response_text += f"**🔗 Listing:** {result['link']}\n\n"
+
+        response_text += "---\n\n"
 
     # Add community analysis if available
     if community_msg:
-        response_data["community_analysis"] = {
-            "location": community_msg.location,
-            "overall_score": community_msg.overall_score,
-            "overall_explanation": community_msg.overall_explanation,
-            "safety_score": community_msg.safety_score,
-            "positive_stories": community_msg.positive_stories,
-            "negative_stories": community_msg.negative_stories,
-            "school_rating": community_msg.school_rating,
-            "school_explanation": community_msg.school_explanation,
-            "housing_price_per_square_foot": community_msg.housing_price_per_square_foot,
-            "average_house_size_square_foot": community_msg.average_house_size_square_foot
-        }
+        response_text += f"## 🏘️ Community Analysis: {community_msg.location}\n\n"
 
-    # Format response as readable text
-    response_text = f"✅ {research_msg.search_summary}\n\n"
-    response_text += f"Found {research_msg.total_found} properties with complete details.\n\n"
-    response_text += f"Full data:\n{json.dumps(response_data, indent=2)}"
+        if community_msg.overall_score is not None:
+            response_text += f"**Overall Score:** {community_msg.overall_score}/10\n\n"
+
+        if community_msg.overall_explanation:
+            response_text += f"**Overview:** {community_msg.overall_explanation}\n\n"
+
+        if community_msg.safety_score is not None:
+            response_text += f"**🛡️ Safety Score:** {community_msg.safety_score}/10\n\n"
+
+        if community_msg.school_rating is not None:
+            response_text += f"**🎓 School Rating:** {community_msg.school_rating}/10\n"
+        if community_msg.school_explanation:
+            response_text += f"   *{community_msg.school_explanation}*\n\n"
+
+        if community_msg.housing_price_per_square_foot:
+            response_text += f"**💵 Housing Price per Sqft:** ${community_msg.housing_price_per_square_foot}\n\n"
+
+        if community_msg.average_house_size_square_foot:
+            response_text += f"**📏 Average House Size:** {community_msg.average_house_size_square_foot} sqft\n\n"
+
+        if community_msg.positive_stories:
+            response_text += f"**✅ Positive Highlights:**\n\n"
+            for story in community_msg.positive_stories[:3]:
+                if isinstance(story, dict):
+                    response_text += f"- **{story.get('title', 'News')}**\n"
+                    response_text += f"  {story.get('summary', '')}\n"
+                    if story.get('url'):
+                        response_text += f"  [Read more]({story['url']})\n"
+                else:
+                    response_text += f"- {story}\n"
+                response_text += "\n"
+
+        if community_msg.negative_stories:
+            response_text += f"**⚠️ Considerations:**\n\n"
+            for story in community_msg.negative_stories[:3]:
+                if isinstance(story, dict):
+                    response_text += f"- **{story.get('title', 'News')}**\n"
+                    response_text += f"  {story.get('summary', '')}\n"
+                    if story.get('url'):
+                        response_text += f"  [Read more]({story['url']})\n"
+                else:
+                    response_text += f"- {story}\n"
+                response_text += "\n"
 
     # Send final response
     await ctx.send(user_sender, create_text_chat(response_text, end_session=True))
@@ -246,8 +301,6 @@ async def handle_research(ctx: Context, sender: str, msg: ResearchResponse):
     sessions[msg.session_id]["research"] = msg
     sessions[msg.session_id]["geocoded_results"] = []
     sessions[msg.session_id]["geocoding_count"] = 0
-    sessions[msg.session_id]["poi_results"] = []
-    sessions[msg.session_id]["poi_count"] = 0
 
     user_sender = sessions[msg.session_id].get("user_sender")
 
@@ -306,22 +359,20 @@ async def handle_mapbox(ctx: Context, sender: str, msg: MapboxResponse):
                 "longitude": msg.longitude,
                 "address": msg.address
             })
-
-            # Trigger POI search for this location
-            ctx.logger.info(f"Triggering POI search for listing {idx + 1}")
-            await ctx.send(
-                local_discovery_address,
-                LocalDiscoveryRequest(
-                    latitude=msg.latitude,
-                    longitude=msg.longitude,
-                    session_id=base_session_id,
-                    listing_index=idx
-                )
-            )
         else:
             ctx.logger.warning(f"Geocoding error for result {idx + 1}: {msg.error}")
 
         sessions[base_session_id]["geocoding_count"] = sessions[base_session_id].get("geocoding_count", 0) + 1
+
+        # Check if all geocoding is complete and send final response
+        expected_count = sessions[base_session_id].get("expected_results_count", 0)
+        geocoding_count = sessions[base_session_id]["geocoding_count"]
+
+        ctx.logger.info(f"Geocoding progress: {geocoding_count}/{expected_count}")
+
+        if geocoding_count >= expected_count and expected_count > 0:
+            ctx.logger.info("All geocoding complete! Building final response...")
+            await send_final_response(ctx, base_session_id)
 
     else:
         # Legacy single result geocoding
