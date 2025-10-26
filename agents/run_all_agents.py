@@ -1,3 +1,12 @@
+import sys
+import os
+
+# Add the main_sandbox directory to Python path so main_agents can be imported
+current_dir = os.path.dirname(os.path.abspath(__file__))
+main_sandbox_path = os.path.join(current_dir, 'main_sandbox')
+if main_sandbox_path not in sys.path:
+    sys.path.insert(0, main_sandbox_path)
+
 from uagents import Bureau
 from scoping_agent import agent as scoping_agent
 from community_analysis_agent import agent as community_analysis_agent
