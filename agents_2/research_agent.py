@@ -12,7 +12,8 @@ from uagents_core.contrib.protocols.chat import (
 )
 from brightdata_client import BrightDataClient
 import aiohttp, os, json
-
+from dotenv import load_dotenv
+load_dotenv()
 
 ASI_API_KEY = os.getenv("ASI_API_KEY")
 ASI_URL = "https://api.asi1.ai/v1/chat/completions"
