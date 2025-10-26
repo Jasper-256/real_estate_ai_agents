@@ -3,3 +3,4 @@ venv/
 __pycache__/
 home_inspection_docs/
 .DS_Store
+.venv/
