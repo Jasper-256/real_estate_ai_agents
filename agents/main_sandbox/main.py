@@ -1,5 +1,5 @@
 """
-Estate Search Main - Coordinator with Chat Protocol
+Real Estate Agent - Coordinator between all agents
 """
 import asyncio
 import json

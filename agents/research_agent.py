@@ -1,3 +1,6 @@
+"""
+Research Agent - Searches for property listings and generates a summary
+"""
 from datetime import datetime
 from uuid import uuid4
 

@@ -1,5 +1,5 @@
 """
-General Agent - Handles general questions about areas, neighborhoods, etc.
+Real Estate Intern - Handles general questions about areas, neighborhoods, etc.
 """
 from datetime import datetime
 from uuid import uuid4
