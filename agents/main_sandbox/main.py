@@ -15,7 +15,7 @@ from uagents_core.contrib.protocols.chat import (
     chat_protocol_spec,
 )
 from typing import Dict, Any
-from agents.models import (
+from main_agents.models import (
     ScopingRequest,
     ScopingResponse,
     ResearchRequest,
@@ -29,12 +29,12 @@ from agents.models import (
     CommunityAnalysisRequest,
     CommunityAnalysisResponse,
 )
-from agents.scoping_agent import create_scoping_agent
-from agents.research_agent import create_research_agent
-from agents.general_agent import create_general_agent
-from agents.mapbox_agent import create_mapbox_agent
-from agents.local_discovery_agent import create_local_discovery_agent
-from agents.community_analysis_agent import create_community_analysis_agent
+from main_agents.scoping_agent import create_scoping_agent
+from main_agents.research_agent import create_research_agent
+from main_agents.general_agent import create_general_agent
+from main_agents.mapbox_agent import create_mapbox_agent
+from main_agents.local_discovery_agent import create_local_discovery_agent
+from main_agents.community_analysis_agent import create_community_analysis_agent
 
 
 # Helper function to create chat messages
