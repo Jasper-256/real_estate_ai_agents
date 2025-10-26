@@ -1,3 +1,6 @@
+![tag:innovationlab](https://img.shields.io/badge/innovationlab-3D8BD3)
+![tag:hackathon](https://img.shields.io/badge/hackathon-5F43F1)
+
 # Real Estate AI Agents
 
 A multi-agent system for intelligent real estate property search and analysis across the United States.
@@ -58,7 +61,7 @@ Runs the complete multi-agent system with coordinator on port 8080.
 ```bash
 python agents/run_all_agents.py
 ```
-Runs all agents concurrently in a Bureau without the coordinator.
+Runs all agents concurrently in a Bureau.
 
 ### Single Agent
 Run any agent individually:
