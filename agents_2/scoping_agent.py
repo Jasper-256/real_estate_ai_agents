@@ -1,25 +1,32 @@
 """
 Scoping Agent - Collects user requirements for property search
 """
-from uagents import Agent, Context
-from models import ScopingRequest, ScopingResponse, UserRequirements
+from datetime import datetime
+from uuid import uuid4
+
+from uagents import Context, Protocol, Agent
+from uagents_core.contrib.protocols.chat import (
+    ChatAcknowledgement,
+    ChatMessage,
+    EndSessionContent,
+    StartSessionContent,
+    TextContent,
+    chat_protocol_spec,
+)
 from llm_client import SimpleLLMAgent
 
 
-def create_scoping_agent(port: int = 8001):
-    """Create and configure the scoping agent"""
+def create_text_chat(text: str, end_session: bool = False) -> ChatMessage:
+    content = [TextContent(type="text", text=text)]
+    if end_session:
+        content.append(EndSessionContent(type="end-session"))
+    return ChatMessage(timestamp=datetime.utcnow(), msg_id=uuid4(), content=content)
 
-    agent = Agent(
-        name="scoping_agent",
-        port=port,
-        seed="scoping_agent_seed",
-        endpoint=[f"http://localhost:{port}/submit"]
-    )
 
-    # LLM client for conversation
-    llm_client = SimpleLLMAgent(
-        "scoping_agent",
-        system_prompt="""You are a friendly real estate agent helping users find their dream home in the San Francisco Bay Area.
+# LLM client for conversation
+llm_client = SimpleLLMAgent(
+    "scoping_agent",
+    system_prompt="""You are a friendly real estate agent helping users find their dream home in the San Francisco Bay Area.
 
 Your job is to gather the following information from the user through natural conversation:
 1. Budget (minimum and maximum price range)
@@ -66,36 +73,62 @@ RESPONSE FORMATS:
   "is_complete": false,
   "is_general_question": false
 }"""
+)
+
+agent = Agent(
+    name="Scoping Agent",
+    seed="scoping_agent_seed_12343247",
+    mailbox=True,
+)
+
+# We create a new protocol which is compatible with the chat protocol spec. This ensures
+# compatibility between agents
+protocol = Protocol(spec=chat_protocol_spec)
+
+# Store conversation history per sender
+conversations = {}
+
+
+# We define the handler for the chat messages that are sent to your agent
+@protocol.on_message(ChatMessage)
+async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
+    # send the acknowledgement for receiving the message
+    await ctx.send(
+        sender,
+        ChatAcknowledgement(timestamp=datetime.now(), acknowledged_msg_id=msg.msg_id),
     )
 
-    # Store conversation history per session
-    conversations = {}
-
-    @agent.on_event("startup")
-    async def startup(ctx: Context):
-        ctx.logger.info(f"Scoping Agent started at {ctx.agent.address}")
-
-    @agent.on_message(model=ScopingRequest)
-    async def handle_request(ctx: Context, sender: str, msg: ScopingRequest):
-        ctx.logger.info(f"Scoping agent received message from {sender}")
-
+    # greet if a session starts
+    if any(isinstance(item, StartSessionContent) for item in msg.content):
+        await ctx.send(
+            sender,
+            create_text_chat("Hi! I'm a real estate agent helping you find homes in the San Francisco Bay Area. What are you looking for?", end_session=False),
+        )
         # Initialize conversation history
-        if msg.session_id not in conversations:
-            conversations[msg.session_id] = []
+        conversations[sender] = []
+        return
 
-        # Add user message to history
-        conversations[msg.session_id].append({
-            "role": "user",
-            "content": msg.user_message
-        })
+    text = msg.text()
+    if not text:
+        return
 
-        # Build conversation context
-        conversation_text = "\n".join([
-            f"{'User' if m['role'] == 'user' else 'Agent'}: {m['content']}"
-            for m in conversations[msg.session_id]
-        ])
+    # Initialize conversation history if not exists
+    if sender not in conversations:
+        conversations[sender] = []
 
-        prompt = f"""Based on the following conversation, determine the user's intent:
+    # Add user message to history
+    conversations[sender].append({
+        "role": "user",
+        "content": text
+    })
+
+    # Build conversation context
+    conversation_text = "\n".join([
+        f"{'User' if m['role'] == 'user' else 'Agent'}: {m['content']}"
+        for m in conversations[sender]
+    ])
+
+    prompt = f"""Based on the following conversation, determine the user's intent:
 
 Conversation:
 {conversation_text}
@@ -113,6 +146,7 @@ Examples:
 
 Respond with a JSON object as specified in your instructions."""
 
+    try:
         # Query LLM
         result = await llm_client.query_llm(prompt, temperature=0.3)
 
@@ -125,48 +159,53 @@ Respond with a JSON object as specified in your instructions."""
                 ctx.logger.info(f"DEBUG - is_general_question: {parsed.get('is_general_question', False)}")
                 ctx.logger.info(f"DEBUG - is_complete: {parsed.get('is_complete', False)}")
 
+                agent_message = parsed.get("agent_message", "How can I help you find a home?")
+
                 # Store agent response in history
-                conversations[msg.session_id].append({
+                conversations[sender].append({
                     "role": "assistant",
-                    "content": parsed.get("agent_message", "")
+                    "content": agent_message
                 })
 
-                # Build response
-                requirements = None
-                community_name = None
+                # Log if requirements are gathered
                 if parsed.get("is_complete", False) and "requirements" in parsed:
-                    requirements = UserRequirements(**parsed["requirements"])
-                    # Extract community name from location
-                    community_name = requirements.location if requirements else None
-                    ctx.logger.info(f"Requirements gathered for session {msg.session_id}, community: {community_name}")
+                    requirements = parsed["requirements"]
+                    ctx.logger.info(f"Requirements gathered from {sender}: {requirements}")
 
-                response = ScopingResponse(
-                    agent_message=parsed.get("agent_message", "How can I help you find a home?"),
-                    is_complete=parsed.get("is_complete", False),
-                    session_id=msg.session_id,
-                    requirements=requirements,
-                    is_general_question=parsed.get("is_general_question", False),
-                    general_question=parsed.get("general_question", None),
-                    community_name=community_name
-                )
+                # Send response
+                await ctx.send(sender, create_text_chat(agent_message, end_session=False))
             else:
                 ctx.logger.warning("Failed to parse LLM response")
-                response = ScopingResponse(
-                    agent_message="I'm here to help you find a home in the Bay Area. What are you looking for?",
-                    is_complete=False,
-                    session_id=msg.session_id,
-                    requirements=None
-                )
-
-            await ctx.send(sender, response)
+                response_msg = "I'm here to help you find a home in the Bay Area. What are you looking for?"
+                conversations[sender].append({
+                    "role": "assistant",
+                    "content": response_msg
+                })
+                await ctx.send(sender, create_text_chat(response_msg, end_session=False))
         else:
             ctx.logger.error(f"LLM error: {result['content']}")
-            response = ScopingResponse(
-                agent_message="I'm having trouble processing your request. Could you try again?",
-                is_complete=False,
-                session_id=msg.session_id,
-                requirements=None
-            )
-            await ctx.send(sender, response)
+            response_msg = "I'm having trouble processing your request. Could you try again?"
+            conversations[sender].append({
+                "role": "assistant",
+                "content": response_msg
+            })
+            await ctx.send(sender, create_text_chat(response_msg, end_session=False))
 
-    return agent
+    except Exception as e:
+        ctx.logger.exception('Error processing message')
+        response_msg = f"An error occurred while processing your request. Please try again later."
+        await ctx.send(sender, create_text_chat(response_msg, end_session=False))
+
+
+@protocol.on_message(ChatAcknowledgement)
+async def handle_ack(ctx: Context, sender: str, msg: ChatAcknowledgement):
+    # we are not interested in the acknowledgements for this example, but they can be useful to
+    # implement read receipts, for example.
+    pass
+
+
+# attach the protocol to the agent
+agent.include(protocol, publish_manifest=True)
+
+if __name__ == "__main__":
+    agent.run()
