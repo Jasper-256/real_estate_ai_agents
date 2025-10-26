@@ -77,7 +77,7 @@ async def generate_llm_summary(search_results: list, requirements, original_quer
 
     # Format search results
     results_text = ""
-    for i, result in enumerate(search_results[:8], 1):
+    for i, result in enumerate(search_results[:10], 1):
         title = result.get("title", "")
         description = result.get("description", "")
         link = result.get("link", "")
@@ -268,8 +268,8 @@ def create_research_agent(port: int = 8002):
 
                     ctx.logger.info(f"Found {len(organic_results)} organic search results")
 
-                    # Try to scrape the first 5 results for images
-                    results_to_scrape = organic_results[:5]
+                    # Try to scrape the first 10 results for images
+                    results_to_scrape = organic_results[:10]
                     ctx.logger.info(f"Scraping {len(results_to_scrape)} results for images")
 
                     for idx, result in enumerate(results_to_scrape):
