@@ -68,7 +68,7 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
         ctx.logger.info(f"Received question: {text}")
 
         # Perform Tavily search for general information
-        search_query = f"{text} Bay Area"
+        search_query = f"{text}"
 
         ctx.logger.info(f"Searching with query: {search_query}")
 
@@ -98,7 +98,7 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
         r = client.chat.completions.create(
             model="asi1-mini",
             messages=[
-                {"role": "system", "content": """You are a knowledgeable Bay Area real estate assistant who answers general questions about neighborhoods, areas, schools, amenities, and local information.
+                {"role": "system", "content": """You are a knowledgeable real estate assistant who answers general questions about neighborhoods, areas, schools, amenities, and local information in the United States.
 
 Your job is to provide helpful, accurate information based on search results.
 

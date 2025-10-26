@@ -20,7 +20,7 @@ def create_general_agent(port: int = 8003):
     # LLM client for answering questions
     llm_client = SimpleLLMAgent(
         "general_agent",
-        system_prompt="""You are a knowledgeable Bay Area real estate assistant who answers general questions about neighborhoods, areas, schools, amenities, and local information.
+        system_prompt="""You are a knowledgeable real estate assistant who answers general questions about neighborhoods, areas, schools, amenities, and local information in the United States.
 
 Your job is to provide helpful, accurate information based on search results.
 

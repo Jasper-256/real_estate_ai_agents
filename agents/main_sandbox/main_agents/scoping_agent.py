@@ -19,13 +19,13 @@ def create_scoping_agent(port: int = 8001):
     # LLM client for conversation
     llm_client = SimpleLLMAgent(
         "scoping_agent",
-        system_prompt="""You are a friendly real estate agent helping users find their dream home in the San Francisco Bay Area.
+        system_prompt="""You are a friendly real estate agent helping users find their dream home in any city in the United States.
 
 Your job is to gather the following information from the user through natural conversation:
 1. Budget (minimum and maximum price range)
 2. Number of bedrooms
 3. Number of bathrooms
-4. Specific location within Bay Area (cities like San Francisco, Oakland, San Jose, etc.)
+4. Specific location within the United States (cities like San Francisco, Oakland, San Jose, etc.)
 
 CRITICAL RULES:
 - Be conversational and friendly
@@ -55,7 +55,7 @@ RESPONSE FORMATS:
     "budget_max": <number>,
     "bedrooms": <number>,
     "bathrooms": <number>,
-    "location": "<city/area in Bay Area>",
+    "location": "<city/area in the United States>",
     "additional_info": "<optional additional preferences or null>"
   }
 }
@@ -152,7 +152,7 @@ Respond with a JSON object as specified in your instructions."""
             else:
                 ctx.logger.warning("Failed to parse LLM response")
                 response = ScopingResponse(
-                    agent_message="I'm here to help you find a home in the Bay Area. What are you looking for?",
+                    agent_message="I'm here to help you find a home in the United States. What are you looking for?",
                     is_complete=False,
                     session_id=msg.session_id,
                     requirements=None
