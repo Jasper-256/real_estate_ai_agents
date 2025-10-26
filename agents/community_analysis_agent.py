@@ -1,70 +1,56 @@
+"""
+Community Analysis Agent - Analyzes community news, safety, schools, and housing metrics
+"""
+import os
+import json
 from datetime import datetime
 from uuid import uuid4
-import os
-import time
-from typing import Dict, Any
-import json
 
 from openai import OpenAI
-from uagents import Context, Protocol, Agent, Model
+from uagents import Context, Protocol, Agent
 from uagents_core.contrib.protocols.chat import (
     ChatAcknowledgement,
     ChatMessage,
     EndSessionContent,
+    StartSessionContent,
     TextContent,
     chat_protocol_spec,
 )
-from dotenv import load_dotenv
 from tavily import TavilyClient
+from dotenv import load_dotenv
 
 load_dotenv()
- 
- 
-### Community News Finder Agent
 
-## This agent analyzes community news for a given location and provides:
-## - 2 positive news stories
-## - 2 negative news stories
-## - A community safety score (0-10 with precision to tenths)
-## Returns structured JSON format for easy parsing
-
-# REST API Models
-class LocationNewsRequest(Model):
-    location_name: str
-
-class LocationNewsResponse(Model):
-    timestamp: int
-    location: str
-    overall_score: float
-    overall_explanation: str
-    safety_score: float
-    positive_stories: list  # List of dicts: [{"title": str, "summary": str, "url": str}, ...]
-    negative_stories: list  # List of dicts: [{"title": str, "summary": str, "url": str}, ...]
-    school_rating: float
-    school_explanation: str
-    housing_price_per_square_foot: int
-    average_house_size_square_foot: int
-    agent_address: str
+def create_text_chat(text: str, end_session: bool = False) -> ChatMessage:
+    content = [TextContent(type="text", text=text)]
+    if end_session:
+        content.append(EndSessionContent(type="end-session"))
+    return ChatMessage(timestamp=datetime.utcnow(), msg_id=uuid4(), content=content)
 
 # Model configuration
 MODEL_NAME = "asi1-mini"
 
 client = OpenAI(
-    # By default, we are using the ASI:One LLM endpoint and model
     base_url='https://api.asi1.ai/v1',
-
-    # You can get an ASI:One api key by creating an account at https://asi1.ai/dashboard/api-keys
-    api_key=os.getenv('FETCH_AI_API_KEY'),
+    api_key=os.getenv('ASI_API_KEY'),
 )
 
 # Initialize Tavily client for real news search
 tavily_client = TavilyClient(api_key=os.getenv('TAVILY_API_KEY'))
 
+agent = Agent(
+    name="Community Analysis Agent",
+    seed="community_analysis_agent_seed_97234",
+    mailbox=True,
+)
+
+# We create a new protocol which is compatible with the chat protocol spec
+protocol = Protocol(spec=chat_protocol_spec)
+
 # Helper function to fetch real news articles using Tavily
-def fetch_news_articles(location_name: str) -> list:
+async def fetch_news_articles(location_name: str) -> list:
     """Fetch real news articles about a location using Tavily search."""
     try:
-        # Search for recent news about the location
         search_query = f"{location_name} local news community safety crime development"
         response = tavily_client.search(
             query=search_query,
@@ -90,10 +76,9 @@ def fetch_news_articles(location_name: str) -> list:
         return []
 
 # Helper function to fetch school-related articles using Tavily
-def fetch_school_articles(location_name: str) -> list:
+async def fetch_school_articles(location_name: str) -> list:
     """Fetch articles about schools and education in a location using Tavily search."""
     try:
-        # Search for school ratings, rankings, and education quality
         search_query = f"{location_name} schools ratings rankings education quality greatschools niche"
         response = tavily_client.search(
             query=search_query,
@@ -119,10 +104,9 @@ def fetch_school_articles(location_name: str) -> list:
         return []
 
 # Helper function to fetch housing data using Tavily
-def fetch_housing_data(location_name: str) -> list:
+async def fetch_housing_data(location_name: str) -> list:
     """Fetch articles about housing prices and market data in a location using Tavily search."""
     try:
-        # Search for housing prices, market data, and real estate information
         search_query = f"{location_name} housing prices per square foot average home size zillow redfin realtor"
         response = tavily_client.search(
             query=search_query,
@@ -148,15 +132,13 @@ def fetch_housing_data(location_name: str) -> list:
         return []
 
 # Helper function to query the model
-def query_model(location_name: str) -> str:
+async def query_model(location_name: str) -> str:
     """Query the ASI:One model to get community news and safety analysis for a location."""
     try:
         # Fetch real news articles using Tavily
-        articles = fetch_news_articles(location_name)
-        # Fetch school-related articles
-        school_articles = fetch_school_articles(location_name)
-        # Fetch housing data articles
-        housing_articles = fetch_housing_data(location_name)
+        articles = await fetch_news_articles(location_name)
+        school_articles = await fetch_school_articles(location_name)
+        housing_articles = await fetch_housing_data(location_name)
 
         # Format the articles for the LLM
         articles_text = ""
@@ -249,18 +231,53 @@ YOU WILL CHOOSE THE NEWS ARTICLES THAT YOU INCLUDE ACCORDING TO THE FOLLOWING CR
     except Exception as e:
         raise e
 
-agent = Agent(
-    name="Community Analysis Agent",
-    seed="8792459787894231",
-    port=8001,
-    endpoint=["http://localhost:8001/submit"],
-    mailbox=True,
-    publish_agent_details=True,
-)
- 
-# We create a new protocol which is compatible with the chat protocol spec. This ensures
-# compatibility between agents
-protocol = Protocol(spec=chat_protocol_spec)
+def format_analysis_response(response_data: dict) -> str:
+    """Format the JSON response into a nice text message for the chat."""
+    try:
+        location = response_data.get("location", "Unknown")
+        overall_data = response_data.get("overall", {})
+        safety_data = response_data.get("safety", {})
+        schools_data = response_data.get("schools", {})
+        housing_data = response_data.get("housing_avg", {})
+
+        response_text = f"# Community Analysis for {location}\n\n"
+
+        # Overall Score
+        response_text += f"## Overall Score: {overall_data.get('score', 'N/A')}/10\n"
+        response_text += f"{overall_data.get('explanation', '')}\n\n"
+
+        # Safety Section
+        response_text += f"## Safety Score: {safety_data.get('score', 'N/A')}/10\n\n"
+
+        positive_stories = safety_data.get('positive_stories', [])
+        if positive_stories:
+            response_text += "### Positive Stories:\n"
+            for story in positive_stories:
+                response_text += f"- **{story.get('title', '')}**\n"
+                response_text += f"  {story.get('summary', '')}\n"
+                response_text += f"  Source: {story.get('url', '')}\n\n"
+
+        negative_stories = safety_data.get('negative_stories', [])
+        if negative_stories:
+            response_text += "### Negative Stories:\n"
+            for story in negative_stories:
+                response_text += f"- **{story.get('title', '')}**\n"
+                response_text += f"  {story.get('summary', '')}\n"
+                response_text += f"  Source: {story.get('url', '')}\n\n"
+
+        # Schools Section
+        response_text += f"## Schools Score: {schools_data.get('score', 'N/A')}/10\n"
+        response_text += f"{schools_data.get('explanation', '')}\n\n"
+
+        # Housing Section
+        response_text += f"## Housing Information:\n"
+        response_text += f"- Price per square foot: ${housing_data.get('housing_price_per_square_foot', 0)}\n"
+        response_text += f"- Average house size: {housing_data.get('average_house_size_square_foot', 0)} sq ft\n"
+
+        return response_text
+    except Exception as e:
+        return f"Error formatting response: {e}"
+
 
 # We define the handler for the chat messages that are sent to your agent
 @protocol.on_message(ChatMessage)
@@ -271,32 +288,45 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
         ChatAcknowledgement(timestamp=datetime.now(), acknowledged_msg_id=msg.msg_id),
     )
 
-    # collect up all the text chunks (expecting a location name)
-    location_name = ''
-    for item in msg.content:
-        if isinstance(item, TextContent):
-            location_name += item.text
+    text = msg.text()
+    if not text:
+        return
 
-    # query the model for community news analysis
-    response = 'I am afraid something went wrong and I am unable to analyze the community news at the moment'
     try:
-        response = query_model(location_name.strip())
-    except:
+        ctx.logger.info(f"Analyzing location: {text}")
+
+        # Query the model with the location name
+        response_text = await query_model(text)
+
+        # Strip markdown code blocks if present
+        cleaned_text = response_text.strip()
+        if cleaned_text.startswith("```json"):
+            cleaned_text = cleaned_text[7:]
+        elif cleaned_text.startswith("```"):
+            cleaned_text = cleaned_text[3:]
+
+        if cleaned_text.endswith("```"):
+            cleaned_text = cleaned_text[:-3]
+
+        cleaned_text = cleaned_text.strip()
+
+        # Parse the JSON response
+        response_data = json.loads(cleaned_text)
+
+        # Format it nicely for chat
+        formatted_response = format_analysis_response(response_data)
+
+        ctx.logger.info(f"Successfully analyzed {text}")
+
+    except json.JSONDecodeError as e:
+        ctx.logger.exception('Error parsing JSON response')
+        formatted_response = f"Sorry, I encountered an error parsing the analysis results. Please try again."
+
+    except Exception as e:
         ctx.logger.exception('Error querying model')
+        formatted_response = f"An error occurred while processing your request: {str(e)}"
 
-    # send the response back to the user
-    await ctx.send(sender, ChatMessage(
-        timestamp=datetime.now(),
-        msg_id=uuid4(),
-        content=[
-            # we send the contents back in the chat message
-            TextContent(type="text", text=response),
-            # we also signal that the session is over, this also informs the user that we are not recording any of the
-            # previous history of messages.
-            EndSessionContent(type="end-session"),
-        ]
-    ))
-
+    await ctx.send(sender, create_text_chat(formatted_response, end_session=True))
 
 
 @protocol.on_message(ChatAcknowledgement)
@@ -304,113 +334,10 @@ async def handle_ack(ctx: Context, sender: str, msg: ChatAcknowledgement):
     # we are not interested in the acknowledgements for this example, but they can be useful to
     # implement read receipts, for example.
     pass
- 
- 
+
+
 # attach the protocol to the agent
 agent.include(protocol, publish_manifest=True)
-
-
-# REST API Endpoints
-
-@agent.on_rest_get("/status", LocationNewsResponse)
-async def handle_status(ctx: Context) -> Dict[str, Any]:
-    """GET endpoint to check agent status"""
-    return {
-        "timestamp": int(time.time()),
-        "location": "N/A",
-        "overall_score": 0.0,
-        "overall_explanation": "N/A",
-        "safety_score": 0.0,
-        "positive_stories": [],
-        "negative_stories": [],
-        "school_rating": 0.0,
-        "school_explanation": "N/A",
-        "housing_price_per_square_foot": 0,
-        "average_house_size_square_foot": 0,
-        "agent_address": ctx.agent.address,
-        "status": f"Community news agent is running",
-    }
-
-@agent.on_rest_post("/ask", LocationNewsRequest, LocationNewsResponse)
-async def handle_analyze(ctx: Context, req: LocationNewsRequest) -> LocationNewsResponse:
-    """POST endpoint to analyze community news for a location"""
-    import json
-
-    ctx.logger.info(f"Received location analysis request via REST API: {req.location_name}")
-
-    # Query the model with the location name
-    try:
-        response_text = query_model(req.location_name)
-        ctx.logger.info(f"Generated response: {response_text}")
-
-        # Strip markdown code blocks if present
-        cleaned_text = response_text.strip()
-        if cleaned_text.startswith("```json"):
-            cleaned_text = cleaned_text[7:]  # Remove ```json
-        elif cleaned_text.startswith("```"):
-            cleaned_text = cleaned_text[3:]  # Remove ```
-
-        if cleaned_text.endswith("```"):
-            cleaned_text = cleaned_text[:-3]  # Remove closing ```
-
-        cleaned_text = cleaned_text.strip()
-
-        # Parse the JSON response
-        response_data = json.loads(cleaned_text)
-
-        # Extract nested data
-        overall_data = response_data.get("overall", {})
-        safety_data = response_data.get("safety", {})
-        schools_data = response_data.get("schools", {})
-        housing_data = response_data.get("housing_avg", {})
-
-        return LocationNewsResponse(
-            timestamp=int(time.time()),
-            location=response_data.get("location", req.location_name),
-            overall_score=float(overall_data.get("score", 0.0)),
-            overall_explanation=overall_data.get("explanation", "N/A"),
-            safety_score=float(safety_data.get("score", 0.0)),
-            positive_stories=safety_data.get("positive_stories", []),
-            negative_stories=safety_data.get("negative_stories", []),
-            school_rating=float(schools_data.get("score", 0.0)),
-            school_explanation=schools_data.get("explanation", "N/A"),
-            housing_price_per_square_foot=int(housing_data.get("housing_price_per_square_foot", 0)),
-            average_house_size_square_foot=int(housing_data.get("average_house_size_square_foot", 0)),
-            agent_address=ctx.agent.address,
-        )
-    except json.JSONDecodeError as e:
-        ctx.logger.exception(f'Error parsing JSON response: {e}')
-        return LocationNewsResponse(
-            timestamp=int(time.time()),
-            location=req.location_name,
-            overall_score=0.0,
-            overall_explanation="Error parsing response",
-            safety_score=0.0,
-            positive_stories=[],
-            negative_stories=[],
-            school_rating=0.0,
-            school_explanation="Error parsing response",
-            housing_price_per_square_foot=0,
-            average_house_size_square_foot=0,
-            agent_address=ctx.agent.address,
-        )
-    except Exception as e:
-        ctx.logger.exception(f'Error querying model: {e}')
-        return LocationNewsResponse(
-            timestamp=int(time.time()),
-            location=req.location_name,
-            overall_score=0.0,
-            overall_explanation="Error querying model",
-            safety_score=0.0,
-            positive_stories=[],
-            negative_stories=[],
-            school_rating=0.0,
-            school_explanation="Error querying model",
-            housing_price_per_square_foot=0,
-            average_house_size_square_foot=0,
-            agent_address=ctx.agent.address,
-        )
-
 
 if __name__ == "__main__":
     agent.run()
