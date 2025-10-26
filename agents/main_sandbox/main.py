@@ -14,7 +14,9 @@ from uagents_core.contrib.protocols.chat import (
     TextContent,
     chat_protocol_spec,
 )
-from typing import Dict, Any
+from typing import Dict, Any, List
+import os
+from urllib.parse import quote
 from main_agents.models import (
     ScopingRequest,
     ScopingResponse,
@@ -43,6 +45,56 @@ def create_text_chat(text: str, end_session: bool = False) -> ChatMessage:
     if end_session:
         content.append(EndSessionContent(type="end-session"))
     return ChatMessage(timestamp=datetime.utcnow(), msg_id=uuid4(), content=content)
+
+
+# Helper function to generate static map image URL
+def generate_static_map_url(geocoded_results: List[Dict[str, Any]]) -> str:
+    """
+    Generate a Mapbox Static Images API URL showing all property locations.
+
+    Args:
+        geocoded_results: List of dicts with 'latitude', 'longitude', and 'index' keys
+
+    Returns:
+        Complete Mapbox Static Images API URL
+    """
+    mapbox_token = os.getenv("MAPBOX_API_KEY")
+    if not mapbox_token or not geocoded_results:
+        return None
+
+    # Base URL for Mapbox Static Images API
+    base_url = "https://api.mapbox.com/styles/v1/mapbox/streets-v12/static"
+
+    # Create marker overlays for each property
+    # Format: pin-s-{label}+{color}({lon},{lat})
+    markers = []
+    for result in geocoded_results:
+        lat = result.get("latitude")
+        lon = result.get("longitude")
+        idx = result.get("index", 0)
+
+        if lat and lon:
+            # Use index + 1 as label (1-5), red color for visibility
+            label = idx + 1
+            # Use different colors for variety
+            colors = ["e74c3c", "3498db", "2ecc71", "f39c12", "9b59b6"]  # red, blue, green, orange, purple
+            color = colors[idx % len(colors)]
+            markers.append(f"pin-s-{label}+{color}({lon},{lat})")
+
+    if not markers:
+        return None
+
+    # Join all markers with commas
+    overlay = ",".join(markers)
+
+    # Use 'auto' to automatically center and zoom to fit all markers
+    # Request high-res image with @2x
+    image_params = "auto/1000x600@2x"
+
+    # Construct final URL
+    static_map_url = f"{base_url}/{overlay}/{image_params}?access_token={mapbox_token}"
+
+    return static_map_url
 
 
 print("=" * 60)
@@ -128,6 +180,16 @@ async def send_final_response(ctx: Context, session_id: str):
     response_text = f"# 🏠 Property Search Results\n\n"
     response_text += f"**{research_msg.search_summary}**\n\n"
     response_text += f"Found **{research_msg.total_found}** properties matching your criteria.\n\n"
+
+    # Generate and add static map image if we have geocoded results
+    if geocoded_results:
+        map_url = generate_static_map_url(geocoded_results)
+        if map_url:
+            ctx.logger.info("Generated static map URL")
+            response_text += f"## 📍 Map View\n\n"
+            response_text += f"![Properties Map]({map_url})\n\n"
+            response_text += "*Numbered markers correspond to properties listed below*\n\n"
+
     response_text += "---\n\n"
 
     # Format each property
