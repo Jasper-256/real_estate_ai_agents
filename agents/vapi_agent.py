@@ -15,6 +15,7 @@ from uagents_core.contrib.protocols.chat import (
 from typing import Optional, Dict, Any, List
 import os
 import json
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -150,8 +151,29 @@ Remember: Your job is to get the LOWEST price possible while being professional.
     return system_prompt.strip()
 
 
-# Target phone number for listing agent
-TARGET_PHONE_NUMBER = "" # Add phone number here
+def extract_phone_number(text: str) -> Optional[str]:
+    """Extract phone number from text. Supports various formats."""
+    # Patterns for phone numbers
+    patterns = [
+        r'\+?1?\s*\(?(\d{3})\)?[\s.-]?(\d{3})[\s.-]?(\d{4})',  # US format
+        r'\+(\d{1,3})\s*\(?(\d{1,4})\)?[\s.-]?(\d{3,4})[\s.-]?(\d{4})',  # International
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            # Clean up and format the number
+            digits = ''.join(re.findall(r'\d', match.group(0)))
+            if len(digits) == 10:
+                return f"+1{digits}"
+            elif len(digits) == 11 and digits[0] == '1':
+                return f"+{digits}"
+            elif digits.startswith('+'):
+                return digits
+            else:
+                return f"+{digits}"
+
+    return None
 
 # Initialize Vapi client
 try:
@@ -186,49 +208,55 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
         if isinstance(item, TextContent):
             text += item.text
 
-    ctx.logger.info(f"📞 Received chat message: {text[:100]}...")
+    ctx.logger.info(f"📞 Received message: {text[:100]}...")
 
-    # Parse the incoming message as JSON containing negotiation request
-    response = 'I am afraid something went wrong and I am unable to process your negotiation request at the moment'
+    # Check if there's a phone number in the message
+    phone_number = extract_phone_number(text)
+
+    if not phone_number:
+        # No phone number found - ask for it
+        response = "Hi! I'm your AI negotiation agent. I can make phone calls to negotiate on your behalf.\n\nTo get started, please provide the phone number you'd like me to call.\n\nYou can send it in any format like:\n- (555) 123-4567\n- 555-123-4567\n- +1 555 123 4567"
+
+        # Don't end session - wait for phone number
+        await ctx.send(sender, ChatMessage(
+            timestamp=datetime.utcnow(),
+            msg_id=uuid4(),
+            content=[
+                TextContent(type="text", text=response),
+            ]
+        ))
+        return
+
+    # Phone number found - proceed with the call
+    ctx.logger.info(f"📞 Phone number extracted: {phone_number}")
+
+    response = 'I am afraid something went wrong and I am unable to make the call at the moment'
 
     try:
-        # Expect JSON format from prober agent
-        request_data = json.loads(text)
-
-        property_address = request_data.get('property_address', 'Unknown')
-        user_name = request_data.get('user_name', 'Client')
-        user_email = request_data.get('user_email', '')
-        user_preferences = request_data.get('user_preferences', '')
-        intelligence = request_data.get('intelligence', {})
-
-        ctx.logger.info(f"📞 Vapi call request for: {property_address}")
-        ctx.logger.info(f"   User: {user_name}")
-        ctx.logger.info(f"   Leverage Score: {intelligence.get('leverage_score', 0)}/10")
-
         if not vapi_client:
             response = "❌ Vapi client not initialized (missing API key)"
         else:
-            # Build full context for system prompt
-            vapi_context = {
-                "property": {
-                    "address": property_address
-                },
-                "user": {
-                    "name": user_name,
-                    "email": user_email,
-                    "preferences": user_preferences
-                },
-                "intelligence": intelligence
-            }
+            # Simple system prompt for general conversation
+            system_prompt = f"""You are a friendly AI assistant making a phone call on behalf of a user.
 
-            # Build system prompt with all intelligence
-            ctx.logger.info("🔧 Building system prompt with intelligence data...")
-            system_prompt = build_system_prompt(vapi_context)
+The user's message was: "{text}"
 
-            # Build first message
-            first_message = f"Hi, I'm calling on behalf of {user_name} regarding the property at {property_address}. We're very interested and have done some market research. Do you have a moment to discuss?"
+Your job is to have a natural, helpful conversation based on what the user asked you to discuss.
 
-            # Update Vapi assistant with new system prompt
+RULES:
+- Keep responses BRIEF (under 75 words per turn)
+- Be conversational and natural (you're on a phone call)
+- Stay professional and respectful
+- Do NOT use emojis or special formatting
+- Listen carefully and respond appropriately to what the other person says
+
+Start the call by introducing yourself and explaining why you're calling based on the user's request.
+"""
+
+            # Simple first message
+            first_message = "Hi, this is an AI assistant calling on behalf of a user. Do you have a moment to chat?"
+
+            # Update Vapi assistant
             ctx.logger.info(f"📝 Updating Vapi assistant...")
             success = vapi_client.update_assistant(
                 system_prompt=system_prompt,
@@ -241,8 +269,8 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
             ctx.logger.info("✅ Assistant updated successfully")
 
             # Make the phone call
-            ctx.logger.info(f"📞 Initiating call to {TARGET_PHONE_NUMBER}...")
-            call_id = vapi_client.create_call(customer_phone=TARGET_PHONE_NUMBER)
+            ctx.logger.info(f"📞 Initiating call to {phone_number}...")
+            call_id = vapi_client.create_call(customer_phone=phone_number)
 
             if not call_id:
                 raise Exception("Failed to create call")
@@ -255,19 +283,16 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
 
             if call_summary:
                 ctx.logger.info(f"✅ Got call summary: {call_summary[:100]}...")
-                response = f"✅ Call completed!\n\nCall ID: {call_id}\n\nSummary:\n{call_summary}"
+                response = f"✅ Call completed to {phone_number}!\n\nCall ID: {call_id}\n\nSummary:\n{call_summary}"
             else:
                 ctx.logger.warning("⚠️ Call analysis not available (timeout or error)")
-                response = f"✅ Call completed! Call ID: {call_id}\n\nCall analysis not yet available (timeout or processing)."
+                response = f"✅ Call completed to {phone_number}! Call ID: {call_id}\n\nCall analysis not yet available (timeout or processing)."
 
-    except json.JSONDecodeError:
-        ctx.logger.exception('Error parsing JSON request')
-        response = "❌ Invalid request format. Expected JSON with property_address, user_name, user_preferences, and intelligence fields."
     except Exception as e:
         ctx.logger.exception(f'Error processing Vapi call: {e}')
         response = f"❌ Failed to initiate call: {str(e)}"
 
-    # Send the response back to the sender
+    # Send the response back to the sender and end session
     await ctx.send(sender, ChatMessage(
         timestamp=datetime.utcnow(),
         msg_id=uuid4(),
